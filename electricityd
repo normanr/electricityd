@@ -1,0 +1,99 @@
+#!/usr/bin/python
+
+stateFile = '/var/lib/electricity/state'
+mrtgServerAddress = '/var/run/electricity/socket'
+pulseServerAddress = ('',20222)
+
+import os, signal, serial, socket, SocketServer, sys, threading
+
+pulseClients = []
+pulseClientLock = threading.Lock()
+pulseCounter = 0
+credit = 0
+
+def serialMonitor():
+    global pulseCounter, credit
+    serialPort = serial.Serial(0,1200)
+
+    while True:
+        char = serialPort.read()
+        if char == '\xd0':
+            pulseCounter += 1
+            pulseClientLock.acquire()
+            for client in pulseClients:
+                client.send('.')
+            pulseClientLock.release()
+            if pulseCounter % 100 == 0:
+                loadState()
+                credit -= 0.1
+                saveState()
+
+def loadState(loadPulses=False):
+    f = open(stateFile,'r')
+    try:
+        d = f.readlines()
+    finally:
+        f.close()
+    global pulseCounter, credit
+    if loadPulses and len(d) > 0: pulseCounter = int(d[0])
+    if len(d) > 1: credit = float(d[1])
+
+def saveState():
+    f = open(stateFile,'w')
+    try:
+        f.writelines((str(pulseCounter) + '\n',str(credit) + '\n'))
+    finally:
+        f.close()
+
+def cleanup(signum=None, frame=None):
+    if os.path.exists(mrtgServerAddress):
+        os.remove(mrtgServerAddress)
+    loadState()
+    saveState()
+    sys.exit(0)
+
+class mrtgSocketHandler(SocketServer.BaseRequestHandler):
+    def handle(self): # on each client connect
+        self.request.send(str(pulseCounter) + '\n')
+        self.request.send(str(pulseCounter) + '\n')
+        self.request.send('\n')
+        self.request.send('\n')
+        self.request.close()  
+
+class pulseSocketHandler(SocketServer.BaseRequestHandler):
+    def handle(self): # on each client connect
+        pulseClientLock.acquire()
+        pulseClients.append(self.request)
+        pulseClientLock.release()
+        try:
+            try:
+                self.request.recv(1)
+            except:
+                pass
+        finally:
+            pulseClientLock.acquire()
+            pulseClients.remove(self.request)
+            pulseClientLock.release()
+        self.request.close()  
+
+loadState(True)
+signal.signal(signal.SIGINT, cleanup)
+signal.signal(signal.SIGTERM, cleanup)
+
+mrtgServer = SocketServer.ThreadingUnixStreamServer(mrtgServerAddress, mrtgSocketHandler)
+os.chmod(mrtgServerAddress, 0775)
+
+mrtgThread = threading.Thread(None, mrtgServer.serve_forever)
+mrtgThread.setDaemon(True)
+mrtgThread.start()
+
+class ThreadingTCP6Server(SocketServer.ThreadingTCPServer):
+	address_family = socket.AF_INET6
+	allow_reuse_address = True
+
+pulseServer = ThreadingTCP6Server(pulseServerAddress, pulseSocketHandler)
+pulseThread = threading.Thread(None, pulseServer.serve_forever)
+pulseThread.setDaemon(True)
+pulseThread.start()
+
+serialMonitor()
