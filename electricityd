@@ -3,6 +3,7 @@
 stateFile = '/var/lib/electricity/state'
 mrtgServerAddress = '/var/run/electricity/socket'
 pulseServerAddress = ('',20222)
+powerFailScript = 'sudo /opt/etc/power/%s'
 
 import os, signal, serial, socket, SocketServer, sys, threading
 
@@ -10,14 +11,18 @@ pulseClients = []
 pulseClientLock = threading.Lock()
 pulseCounter = 0
 credit = 0
+powerfail = False
 
 def serialMonitor():
-    global pulseCounter, credit
-    serialPort = serial.Serial(0,1200)
+    global pulseCounter, credit, powerfail
+    serialPort = serial.Serial(0,1200,timeout=120)
 
     while True:
         char = serialPort.read()
         if char == '\xd0':
+            if powerfail:
+                powerfail = False
+                os.system(powerFailScript % 'okay')
             pulseCounter += 1
             pulseClientLock.acquire()
             for client in pulseClients:
@@ -27,6 +32,14 @@ def serialMonitor():
                 loadState()
                 credit -= 0.1
                 saveState()
+        elif char == '':
+            if not powerfail:
+                powerfail = True
+                os.system(powerFailScript % 'fail')
+            pulseClientLock.acquire()
+            for client in pulseClients:
+                client.send(' ')
+            pulseClientLock.release()
 
 def loadState(loadPulses=False):
     f = open(stateFile,'r')
