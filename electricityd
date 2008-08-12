@@ -5,12 +5,12 @@ mrtgServerAddress = '/var/run/electricity/socket'
 pulseServerAddress = ('',20222)
 powerFailScript = 'sudo /opt/etc/power/%s'
 
-import os, signal, serial, socket, SocketServer, sys, threading
+import fcntl, os, signal, serial, socket, SocketServer, sys, threading
 
 pulseClients = []
 pulseClientLock = threading.Lock()
+credit = 0.0
 pulseCounter = 0
-credit = 0
 powerfail = False
 
 def serialMonitor():
@@ -29,9 +29,7 @@ def serialMonitor():
                 client.send('.')
             pulseClientLock.release()
             if pulseCounter % 100 == 0:
-                loadState()
-                credit -= 0.1
-                saveState()
+                saveState(-0.1)
         elif char == '':
             if not powerfail:
                 powerfail = True
@@ -41,19 +39,27 @@ def serialMonitor():
                 client.send(' ')
             pulseClientLock.release()
 
-def loadState(loadPulses=False):
+def loadState():
     f = open(stateFile,'r')
+    fcntl.flock(f,fcntl.LOCK_SH)
     try:
         d = f.readlines()
     finally:
         f.close()
     global pulseCounter, credit
     if len(d) > 0: credit = float(d[0])
-    if loadPulses and len(d) > 1: pulseCounter = int(d[1])
+    if len(d) > 1: pulseCounter = int(d[1])
 
-def saveState():
-    f = open(stateFile,'w')
+def saveState(deltaCredit):
+    f = open(stateFile,'r+')
+    fcntl.flock(f,fcntl.LOCK_EX)
     try:
+        d = f.readlines()
+        global pulseCounter, credit
+        if len(d) > 0: credit = float(d[0])
+        credit += deltaCredit
+        f.seek(0)
+        f.truncate()
         f.writelines((str(credit) + '\n', str(pulseCounter) + '\n'))
     finally:
         f.close()
@@ -61,8 +67,7 @@ def saveState():
 def cleanup(signum=None, frame=None):
     if os.path.exists(mrtgServerAddress):
         os.remove(mrtgServerAddress)
-    loadState()
-    saveState()
+    saveState(0)
     sys.exit(0)
 
 class mrtgSocketHandler(SocketServer.BaseRequestHandler):
@@ -89,7 +94,7 @@ class pulseSocketHandler(SocketServer.BaseRequestHandler):
             pulseClientLock.release()
         self.request.close()  
 
-loadState(True)
+loadState()
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 

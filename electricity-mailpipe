@@ -1,0 +1,32 @@
+#!/usr/bin/python
+
+stateFile = '/var/lib/electricity/state'
+
+import fcntl, sys
+
+def saveState(deltaCredit):
+    f = open(stateFile,'r+')
+    fcntl.flock(f,fcntl.LOCK_EX)
+    try:
+        d = f.readlines()
+        credit = 0.0
+        pulseCounter = 0
+        if len(d) > 0: credit = float(d[0])
+        if len(d) > 1: pulseCounter = int(d[1])
+        credit += deltaCredit
+        f.seek(0)
+        f.truncate()
+        f.writelines((str(credit) + '\n', str(pulseCounter) + '\n'))
+    finally:
+        f.close()
+
+extraCredit = 0.0
+for l in sys.stdin.readlines():
+    l = l.split()
+    if len(l) == 0: continue
+    if l[0] != 'ELEC': continue
+    if l[1] != 'R': continue
+    if l[-1] != 'units': continue
+    extraCredit += float(l[-2])
+
+saveState(extraCredit)
