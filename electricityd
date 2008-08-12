@@ -48,13 +48,13 @@ def loadState(loadPulses=False):
     finally:
         f.close()
     global pulseCounter, credit
-    if loadPulses and len(d) > 0: pulseCounter = int(d[0])
-    if len(d) > 1: credit = float(d[1])
+    if len(d) > 0: credit = float(d[0])
+    if loadPulses and len(d) > 1: pulseCounter = int(d[1])
 
 def saveState():
     f = open(stateFile,'w')
     try:
-        f.writelines((str(pulseCounter) + '\n',str(credit) + '\n'))
+        f.writelines((str(credit) + '\n', str(pulseCounter) + '\n'))
     finally:
         f.close()
 
