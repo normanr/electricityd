@@ -5,7 +5,7 @@ mrtgServerAddress = '/var/run/electricity/socket'
 pulseServerAddress = ('',20222)
 powerFailScript = 'sudo /opt/etc/power/%s'
 
-import fcntl, os, signal, serial, socket, SocketServer, sys, threading
+import fcntl, os, Queue, signal, serial, socket, SocketServer, sys, threading
 
 pulseClients = []
 pulseClientLock = threading.Lock()
@@ -26,7 +26,7 @@ def serialMonitor():
             pulseCounter += 1
             pulseClientLock.acquire()
             for client in pulseClients:
-                client.send('.')
+                client.put('.')
             pulseClientLock.release()
             if pulseCounter % 100 == 0:
                 saveState(-0.1)
@@ -36,7 +36,7 @@ def serialMonitor():
                 os.system(powerFailScript % 'fail')
             pulseClientLock.acquire()
             for client in pulseClients:
-                client.send(' ')
+                client.put(' ')
             pulseClientLock.release()
 
 def loadState():
@@ -80,19 +80,27 @@ class mrtgSocketHandler(SocketServer.BaseRequestHandler):
 
 class pulseSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
+        self.request.setblocking(0)
+        queue = Queue.Queue()
         pulseClientLock.acquire()
-        pulseClients.append(self.request)
+        pulseClients.append(queue)
         pulseClientLock.release()
         try:
-            try:
-                self.request.recv(1)
-            except:
-                pass
+            while 1:
+                data = queue.get()
+                self.request.send(data)
+                queue.task_done()
+                try:
+                    self.request.recv(1024)
+                except socket.error, msg:
+                    pass
+        except socket.error, msg:
+            pass
         finally:
             pulseClientLock.acquire()
-            pulseClients.remove(self.request)
+            pulseClients.remove(queue)
             pulseClientLock.release()
-        self.request.close()  
+            self.request.close()  
 
 loadState()
 signal.signal(signal.SIGINT, cleanup)
