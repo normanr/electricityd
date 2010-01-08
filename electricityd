@@ -1,90 +1,91 @@
 #!/usr/bin/python
 
-stateFile = '/var/lib/electricity/state'
 mrtgServerAddress = '/var/run/electricity/socket'
+#mrtgServerAddress = '/tmp/electricty_socket'
+serialAddr = '/dev/ttyUSB0'
+serialBaud = 57600
+serialTimeout = 90
 pulseServerAddress = ('',20222)
+#pulseServerAddress = ('',20223)
 powerFailScript = 'sudo /opt/etc/power/%s'
+#powerFailScript = '/bin/echo %s'
 
-import fcntl, os, Queue, signal, serial, socket, SocketServer, sys, threading
+import atexit
+import os
+import Queue
+import re
+import signal
+import serial
+import socket
+import SocketServer
+import sys
+import threading
+import time
 
-pulseClients = []
-pulseClientLock = threading.Lock()
-credit = 0.0
+clients = []
+clients_lock = threading.Lock()
+re_watts = re.compile('<watts>(\d+)</watts>')
 pulseCounter = 0
-powerfail = False
+joules = 0
+
+def sendToClients(data):
+    clients_lock.acquire()
+    for client in clients:
+        client.put(data)
+    clients_lock.release()
 
 def serialMonitor():
-    global pulseCounter, credit, powerfail
-    serialPort = serial.Serial(0,1200,timeout=120)
+    global pulseCounter, joules
+    serialPort = serial.Serial(serialAddr,serialBaud,timeout=serialTimeout)
+    powerfail = False
+    lastReadingAt = 0
+    lastReadingValue = 0
 
     while True:
-        char = serialPort.read()
-        if char == '\xd0':
+        line = serialPort.readline()
+        if line:
             if powerfail:
                 powerfail = False
                 os.system(powerFailScript % 'okay')
             pulseCounter += 1
-            pulseClientLock.acquire()
-            for client in pulseClients:
-                client.put('.')
-            pulseClientLock.release()
-            if pulseCounter % 100 == 0:
-                saveState(-0.1)
-        elif char == '':
+            match = re_watts.search(line)
+            if match:
+                timeNow = time.time()
+                watts = int(match.group(1), 10)
+                if lastReadingValue:
+                    duration = timeNow - lastReadingAt
+                    joules += lastReadingValue * duration
+                lastReadingAt = timeNow
+                lastReadingValue = watts
+            sendToClients(line)
+        else:
             if not powerfail:
                 powerfail = True
                 os.system(powerFailScript % 'fail')
-            pulseClientLock.acquire()
-            for client in pulseClients:
-                client.put(' ')
-            pulseClientLock.release()
-
-def loadState():
-    f = open(stateFile,'r')
-    fcntl.flock(f,fcntl.LOCK_SH)
-    try:
-        d = f.readlines()
-    finally:
-        f.close()
-    global pulseCounter, credit
-    if len(d) > 0: credit = float(d[0])
-    if len(d) > 1: pulseCounter = int(d[1])
-
-def saveState(deltaCredit):
-    f = open(stateFile,'r+')
-    fcntl.flock(f,fcntl.LOCK_EX)
-    try:
-        d = f.readlines()
-        global pulseCounter, credit
-        if len(d) > 0: credit = float(d[0])
-        credit += deltaCredit
-        f.seek(0)
-        f.truncate()
-        f.writelines((str(credit) + '\n', str(pulseCounter) + '\n'))
-    finally:
-        f.close()
+            lastReadingValue = 0
+            sendToClients('\r\n')
 
 def cleanup(signum=None, frame=None):
     if os.path.exists(mrtgServerAddress):
         os.remove(mrtgServerAddress)
-    saveState(0)
     sys.exit(0)
 
 class mrtgSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
-        self.request.send(str(pulseCounter) + '\n')
-        self.request.send(str(pulseCounter) + '\n')
+        wattHours = str(int(joules / 3600))
+        self.request.send(wattHours + '\n')
+        self.request.send(wattHours + '\n')
         self.request.send('\n')
         self.request.send('\n')
         self.request.close()  
 
-class pulseSocketHandler(SocketServer.BaseRequestHandler):
+class clientSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
         self.request.setblocking(0)
         queue = Queue.Queue()
-        pulseClientLock.acquire()
-        pulseClients.append(queue)
-        pulseClientLock.release()
+        clients_lock.acquire()
+        clients.append(queue)
+        clients_lock.release()
         try:
             while 1:
                 data = queue.get()
@@ -97,14 +98,14 @@ class pulseSocketHandler(SocketServer.BaseRequestHandler):
         except socket.error, msg:
             pass
         finally:
-            pulseClientLock.acquire()
-            pulseClients.remove(queue)
-            pulseClientLock.release()
+            clients_lock.acquire()
+            clients.remove(queue)
+            clients_lock.release()
             self.request.close()  
 
-loadState()
 signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
+atexit.register(cleanup)
 
 mrtgServer = SocketServer.ThreadingUnixStreamServer(mrtgServerAddress, mrtgSocketHandler)
 os.chmod(mrtgServerAddress, 0775)
@@ -114,10 +115,10 @@ mrtgThread.setDaemon(True)
 mrtgThread.start()
 
 class ThreadingTCP6Server(SocketServer.ThreadingTCPServer):
-	address_family = socket.AF_INET6
-	allow_reuse_address = True
+    address_family = socket.AF_INET6
+    allow_reuse_address = True
 
-pulseServer = ThreadingTCP6Server(pulseServerAddress, pulseSocketHandler)
+pulseServer = ThreadingTCP6Server(pulseServerAddress, clientSocketHandler)
 pulseThread = threading.Thread(None, pulseServer.serve_forever)
 pulseThread.setDaemon(True)
 pulseThread.start()
