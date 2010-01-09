@@ -1,12 +1,16 @@
 #!/usr/bin/python
 
-mrtgServerAddress = '/var/run/electricity/socket'
-#mrtgServerAddress = '/tmp/electricty_socket'
+mrtgElecServerAddress = '/var/run/electricity/socket'
+mrtgTempServerAddress = '/var/run/electricity/temp_socket'
+#mrtgElecServerAddress = '/tmp/electricty_socket'
+#mrtgElecServerAddress = '/tmp/temperature_socket'
 serialAddr = '/dev/ttyUSB0'
 serialBaud = 57600
 serialTimeout = 90
-pulseServerAddress = ('',20222)
-#pulseServerAddress = ('',20223)
+xmlServerAddress = ('',20222)
+#xmlServerAddress = ('',20223)
+pachubeServerAddress = ('',20080)
+#pachubeServerAddress = ('',20081)
 powerFailScript = 'sudo /opt/etc/power/%s'
 #powerFailScript = '/bin/echo %s'
 
@@ -24,9 +28,12 @@ import time
 
 clients = []
 clients_lock = threading.Lock()
-re_watts = re.compile('<watts>(\d+)</watts>')
+re_watts = re.compile('<ch1><watts>0*(\d+)</watts></ch1>')
+re_temp = re.compile('<tmpr> *([\-\d.]+)</tmpr>')
 pulseCounter = 0
+watts = 0
 joules = 0
+temp = 0
 
 def sendToClients(data):
     clients_lock.acquire()
@@ -35,11 +42,10 @@ def sendToClients(data):
     clients_lock.release()
 
 def serialMonitor():
-    global pulseCounter, joules
+    global pulseCounter, watts, joules, temp
     serialPort = serial.Serial(serialAddr,serialBaud,timeout=serialTimeout)
     powerfail = False
-    lastReadingAt = 0
-    lastReadingValue = 0
+    timeLast = 0
 
     while True:
         line = serialPort.readline()
@@ -51,35 +57,44 @@ def serialMonitor():
             match = re_watts.search(line)
             if match:
                 timeNow = time.time()
-                watts = int(match.group(1), 10)
-                if lastReadingValue:
-                    duration = timeNow - lastReadingAt
-                    joules += lastReadingValue * duration
-                lastReadingAt = timeNow
-                lastReadingValue = watts
+                if watts:
+                    duration = timeNow - timeLast
+                    joules += watts * duration
+                timeLast = timeNow
+                watts = int(match.group(1))
+            match = re_temp.search(line)
+            if match:
+                temp = float(match.group(1))
             sendToClients(line)
         else:
             if not powerfail:
                 powerfail = True
                 os.system(powerFailScript % 'fail')
-            lastReadingValue = 0
+            watts = 0
             sendToClients('\r\n')
 
 def cleanup(signum=None, frame=None):
-    if os.path.exists(mrtgServerAddress):
-        os.remove(mrtgServerAddress)
+    if os.path.exists(mrtgElecServerAddress):
+        os.remove(mrtgElecServerAddress)
+    if os.path.exists(mrtgTempServerAddress):
+        os.remove(mrtgTempServerAddress)
     sys.exit(0)
 
-class mrtgSocketHandler(SocketServer.BaseRequestHandler):
+class mrtgElecSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
         wattHours = str(int(joules / 3600))
         self.request.send(wattHours + '\n')
-        self.request.send(wattHours + '\n')
+        self.request.send('0\n')
         self.request.send('\n')
         self.request.send('\n')
-        self.request.close()  
+        self.request.close()
 
-class clientSocketHandler(SocketServer.BaseRequestHandler):
+class mrtgTempSocketHandler(SocketServer.BaseRequestHandler):
+    def handle(self): # on each client connect
+        self.request.send(str(int(temp)) + '\n')
+        self.request.close()
+
+class xmlSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
         self.request.setblocking(0)
         queue = Queue.Queue()
@@ -94,33 +109,57 @@ class clientSocketHandler(SocketServer.BaseRequestHandler):
                 try:
                     self.request.recv(1024)
                 except socket.error, msg:
-                    pass
+                    if msg[0] != 11: raise
         except socket.error, msg:
-            pass
+	    pass
         finally:
             clients_lock.acquire()
             clients.remove(queue)
             clients_lock.release()
-            self.request.close()  
+            self.request.close()
 
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
-atexit.register(cleanup)
-
-mrtgServer = SocketServer.ThreadingUnixStreamServer(mrtgServerAddress, mrtgSocketHandler)
-os.chmod(mrtgServerAddress, 0775)
-
-mrtgThread = threading.Thread(None, mrtgServer.serve_forever)
-mrtgThread.setDaemon(True)
-mrtgThread.start()
+class pachubeSocketHandler(SocketServer.BaseRequestHandler):
+    def handle(self): # on each client connect
+        try:
+            self.request.recv(1024)
+        except socket.error, msg:
+            return
+        self.request.send('HTTP/1.0 200 OK\r\n')
+        self.request.send('Content-Type: text/csv\r\n')
+        self.request.send('\r\n')
+        self.request.send(str(temp) + ',' + str(watts) + '\r\n')
+        self.request.close()
 
 class ThreadingTCP6Server(SocketServer.ThreadingTCPServer):
     address_family = socket.AF_INET6
     allow_reuse_address = True
 
-pulseServer = ThreadingTCP6Server(pulseServerAddress, clientSocketHandler)
-pulseThread = threading.Thread(None, pulseServer.serve_forever)
-pulseThread.setDaemon(True)
-pulseThread.start()
+signal.signal(signal.SIGINT, cleanup)
+signal.signal(signal.SIGTERM, cleanup)
+atexit.register(cleanup)
+
+mrtgElecServer = SocketServer.ThreadingUnixStreamServer(mrtgElecServerAddress, mrtgElecSocketHandler)
+os.chmod(mrtgElecServerAddress, 0775)
+
+mrtgElecThread = threading.Thread(None, mrtgElecServer.serve_forever)
+mrtgElecThread.setDaemon(True)
+mrtgElecThread.start()
+
+mrtgTempServer = SocketServer.ThreadingUnixStreamServer(mrtgTempServerAddress, mrtgTempSocketHandler)
+os.chmod(mrtgTempServerAddress, 0775)
+
+mrtgTempThread = threading.Thread(None, mrtgTempServer.serve_forever)
+mrtgTempThread.setDaemon(True)
+mrtgTempThread.start()
+
+pachubeServer = ThreadingTCP6Server(pachubeServerAddress, pachubeSocketHandler)
+pachubeThread = threading.Thread(None, pachubeServer.serve_forever)
+pachubeThread.setDaemon(True)
+pachubeThread.start()
+
+xmlServer = ThreadingTCP6Server(xmlServerAddress, xmlSocketHandler)
+xmlThread = threading.Thread(None, xmlServer.serve_forever)
+xmlThread.setDaemon(True)
+xmlThread.start()
 
 serialMonitor()
