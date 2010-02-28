@@ -124,10 +124,11 @@ class pachubeSocketHandler(SocketServer.BaseRequestHandler):
             self.request.recv(1024)
         except socket.error, msg:
             return
-        self.request.send('HTTP/1.0 200 OK\r\n')
-        self.request.send('Content-Type: text/csv\r\n')
-        self.request.send('\r\n')
-        self.request.send(str(temp) + ',' + str(watts) + '\r\n')
+        output = 'HTTP/1.0 200 OK\r\n'
+        output += 'Content-Type: text/csv\r\n'
+        output += '\r\n'
+        output += str(temp) + ',' + str(watts) + '\r\n'
+        self.request.send(output)
         self.request.close()
 
 class ThreadingTCP6Server(SocketServer.ThreadingTCPServer):
