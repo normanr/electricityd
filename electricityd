@@ -83,10 +83,11 @@ def cleanup(signum=None, frame=None):
 class mrtgElecSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
         wattHours = str(int(joules / 3600))
-        self.request.send(wattHours + '\n')
-        self.request.send('0\n')
-        self.request.send('\n')
-        self.request.send('\n')
+        output = wattHours + '\n'
+        output += '0\n'
+        output += '\n'
+        output += '\n'
+        self.request.send(output)
         self.request.close()
 
 class mrtgTempSocketHandler(SocketServer.BaseRequestHandler):
