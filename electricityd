@@ -11,7 +11,7 @@ xmlServerAddress = ('',20222)
 #xmlServerAddress = ('',20223)
 pachubeServerAddress = ('',20080)
 #pachubeServerAddress = ('',20081)
-powerFailScript = 'sudo /opt/etc/power/%s'
+powerFailScript = 'sudo -n /opt/etc/power/%s'
 #powerFailScript = '/bin/echo %s'
 
 import atexit
