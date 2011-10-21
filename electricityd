@@ -13,8 +13,11 @@ pachubeServerAddress = ('',20080)
 #pachubeServerAddress = ('',20081)
 powerFailScript = 'sudo -n /opt/etc/power/%s'
 #powerFailScript = '/bin/echo %s'
+maxLogItems = 10
+logFile = '/var/log/electricity/log'
 
 import atexit
+import collections
 import os
 import Queue
 import re
@@ -28,12 +31,18 @@ import time
 
 clients = []
 clients_lock = threading.Lock()
+log = collections.deque([], maxLogItems)
 re_watts = re.compile('<ch1><watts>0*(\d+)</watts></ch1>')
 re_temp = re.compile('<tmpr> *([\-\d.]+)</tmpr>')
 pulseCounter = 0
 watts = 0
 joules = 0
 temp = 0
+
+def dumpLog(state):
+    with open(logFile, 'a') as f:
+        print >>f, '%.1f, %s:' % (time.time(), state)
+        print >>f, '\n'.join(('%.1f, %.1f, %r' % x  for x in log))
 
 def sendToClients(data):
     clients_lock.acquire()
@@ -48,10 +57,14 @@ def serialMonitor():
     timeLast = 0
 
     while True:
+        timeStart = time.time()
         line = serialPort.readline()
+        readDuration = time.time() - timeStart
+        log.append((timeStart, readDuration, line))
         if line:
             if powerfail:
                 powerfail = False
+                dumpLog('okay')
                 os.system(powerFailScript % 'okay')
             pulseCounter += 1
             match = re_watts.search(line)
@@ -69,6 +82,7 @@ def serialMonitor():
         else:
             if not powerfail:
                 powerfail = True
+                dumpLog('fail')
                 os.system(powerFailScript % 'fail')
             watts = 0
             sendToClients('\r\n')
