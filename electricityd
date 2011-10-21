@@ -1,18 +1,22 @@
 #!/usr/bin/python
 
-mrtgElecServerAddress = '/var/run/electricity/socket'
-mrtgTempServerAddress = '/var/run/electricity/temp_socket'
-#mrtgElecServerAddress = '/tmp/electricty_socket'
-#mrtgElecServerAddress = '/tmp/temperature_socket'
+debug = 0
+if not debug:
+  mrtgElecServerAddress = '/var/run/electricity/socket'
+  mrtgTempServerAddress = '/var/run/electricity/temp_socket'
+  xmlServerAddress = ('',20222)
+  pachubeServerAddress = ('',20080)
+  powerFailScript = 'sudo -n /opt/etc/power/%s'
+else:
+  mrtgElecServerAddress = '/tmp/electricty_socket'
+  mrtgTempServerAddress = '/tmp/temperature_socket'
+  xmlServerAddress = ('',20223)
+  pachubeServerAddress = ('',20081)
+  powerFailScript = '/bin/echo %s'
+
 serialAddr = '/dev/ttyUSB0'
 serialBaud = 57600
 serialTimeout = 90
-xmlServerAddress = ('',20222)
-#xmlServerAddress = ('',20223)
-pachubeServerAddress = ('',20080)
-#pachubeServerAddress = ('',20081)
-powerFailScript = 'sudo -n /opt/etc/power/%s'
-#powerFailScript = '/bin/echo %s'
 maxLogItems = 10
 logFile = '/var/log/electricity/log'
 
