@@ -1,0 +1,5 @@
+Production:
+  /usr/sbin/electricityd /dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller-if00-port0@57600
+
+Testing:
+  ./electricityd socket://localhost:20222@56700

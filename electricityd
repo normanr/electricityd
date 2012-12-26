@@ -1,37 +1,36 @@
 #!/usr/bin/python
 
-debug = 0
-if not debug:
-  mrtgElecServerAddress = '/var/run/electricity/socket'
-  mrtgTempServerAddress = '/var/run/electricity/temp_socket'
-  xmlServerAddress = ('',20222)
-  pachubeServerAddress = ('',20080)
-  powerFailScript = 'sudo -n /opt/etc/power/%s'
-else:
-  mrtgElecServerAddress = '/tmp/electricty_socket'
-  mrtgTempServerAddress = '/tmp/temperature_socket'
-  xmlServerAddress = ('',20223)
-  pachubeServerAddress = ('',20081)
-  powerFailScript = '/bin/echo %s'
-
-serialAddr = '/dev/ttyUSB0'
-serialBaud = 57600
-serialTimeout = 90
-maxLogItems = 10
-logFile = '/var/log/electricity/log'
-
-import atexit
+import BaseHTTPServer
 import collections
 import os
 import Queue
 import re
-import signal
 import serial
 import socket
 import SocketServer
 import sys
 import threading
 import time
+import traceback
+
+if os.getuid() < 1000:
+  xmlServerAddress = ('',20222)
+  httpServerAddress = ('',20080)
+  powerFailScript = 'sudo -n /opt/etc/power/%s'
+  logFile = '/var/log/electricity.log'
+else:
+  xmlServerAddress = ('',20223)
+  httpServerAddress = ('',20081)
+  powerFailScript = '/bin/echo %s'
+  logFile = '/tmp/electricity.log'
+
+if len(sys.argv) < 2:
+  print 'missing address'
+  sys.exit(1)
+
+serialAddr, serialBaud = sys.argv[1].split('@')
+serialTimeout = 90
+maxLogItems = 10
 
 clients = []
 clients_lock = threading.Lock()
@@ -45,18 +44,17 @@ temp = 0
 
 def dumpLog(state):
     with open(logFile, 'a') as f:
-        print >>f, '%.1f, %s:' % (time.time(), state)
         print >>f, '\n'.join(('%.1f, %.1f, %r' % x  for x in log))
+        print >>f, '%.1f, %s' % (time.time(), state)
 
 def sendToClients(data):
-    clients_lock.acquire()
-    for client in clients:
-        client.put(data)
-    clients_lock.release()
+    with clients_lock:
+        for client in clients:
+            client.put(data)
 
 def serialMonitor():
     global pulseCounter, watts, joules, temp
-    serialPort = serial.Serial(serialAddr,serialBaud,timeout=serialTimeout)
+    serialPort = serial.serial_for_url(serialAddr, serialBaud, timeout=serialTimeout)
     powerfail = False
     timeLast = 0
 
@@ -91,35 +89,12 @@ def serialMonitor():
             watts = 0
             sendToClients('\r\n')
 
-def cleanup(signum=None, frame=None):
-    if os.path.exists(mrtgElecServerAddress):
-        os.remove(mrtgElecServerAddress)
-    if os.path.exists(mrtgTempServerAddress):
-        os.remove(mrtgTempServerAddress)
-    sys.exit(0)
-
-class mrtgElecSocketHandler(SocketServer.BaseRequestHandler):
-    def handle(self): # on each client connect
-        wattHours = str(int(joules / 3600))
-        output = wattHours + '\n'
-        output += '0\n'
-        output += '\n'
-        output += '\n'
-        self.request.send(output)
-        self.request.close()
-
-class mrtgTempSocketHandler(SocketServer.BaseRequestHandler):
-    def handle(self): # on each client connect
-        self.request.send(str(int(temp)) + '\n')
-        self.request.close()
-
 class xmlSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
         self.request.setblocking(0)
         queue = Queue.Queue()
-        clients_lock.acquire()
-        clients.append(queue)
-        clients_lock.release()
+        with clients_lock:
+            clients.append(queue)
         try:
             while 1:
                 data = queue.get()
@@ -127,59 +102,89 @@ class xmlSocketHandler(SocketServer.BaseRequestHandler):
                 queue.task_done()
                 try:
                     self.request.recv(1024)
-                except socket.error, msg:
+                except socket.error as msg:
                     if msg[0] != 11: raise
-        except socket.error, msg:
+        except socket.error as msg:
             pass
         finally:
-            clients_lock.acquire()
-            clients.remove(queue)
-            clients_lock.release()
+            with clients_lock:
+                clients.remove(queue)
             self.request.close()
 
-class pachubeSocketHandler(SocketServer.BaseRequestHandler):
-    def handle(self): # on each client connect
+class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+    valid_variables = ['temp', 'watts', 'joules']
+    valid_constants = ['', '0']
+    formats = {'csv':',', 'txt':'\r\n'}
+    content_types = {'csv':'text/csv', 'txt': 'text/plain'}
+
+    def version_string(self):
+        return 'electricityd/3.0' + ' ' + BaseHTTPServer.BaseHTTPRequestHandler.version_string(self)
+
+    def do_GET(self): # on each client request
         try:
-            self.request.recv(1024)
-        except socket.error, msg:
-            return
-        output = 'HTTP/1.0 200 OK\r\n'
-        output += 'Content-Type: text/csv\r\n'
-        output += '\r\n'
-        output += str(temp) + ',' + str(watts) + '\r\n'
-        self.request.send(output)
-        self.request.close()
+            variables, fmt = self.path.lstrip('/').rsplit('.', 1)
+            if fmt not in self.formats:
+                return self.send_error(400, 'Invalid format %s' % fmt)
+
+            variables = variables.split(',')
+            results = []
+            for variable in variables:
+                if variable in self.valid_constants:
+                    results.append(variable)
+                    continue
+                var_ops = variable.split('/')
+                variable = var_ops[0]
+                ops = var_ops[1:]
+                if not variable in self.valid_variables:
+                    return self.send_error(400, 'Invalid variable %s' % variable)
+                if variable:
+                    value = globals()[variable]
+                    for op in ops:
+                        if op == 'int':
+                            value = int(value)
+                        else:
+                            try:
+                                if '.' in op:
+                                    value = value / float(op)
+                                else:
+                                    value = value / int(op)
+                            except (ValueError, ZeroDivisionError) as e:
+                                return self.send_error(400, 'Invalid op %s' % op)
+                    results.append(str(value))
+                else:
+                    results.append('')
+
+
+            result = self.formats[fmt].join(results)
+
+            self.send_response(200, 'OK')
+            self.send_header("Content-Type", self.content_types[fmt])
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(result + '\r\n')
+        except Exception as e:
+            self.send_error(500)
+            traceback.print_exc()
+            dumpLog('%s %s\n%s' % (self.client_address, self.path, traceback.format_exc()))
+
+class ThreadingHTTP6Server(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
+    address_family = socket.AF_INET6
+    allow_reuse_address = True
+    daemon_threads = True
 
 class ThreadingTCP6Server(SocketServer.ThreadingTCPServer):
     address_family = socket.AF_INET6
     allow_reuse_address = True
+    daemon_threads = True
 
-signal.signal(signal.SIGINT, cleanup)
-signal.signal(signal.SIGTERM, cleanup)
-atexit.register(cleanup)
-
-mrtgElecServer = SocketServer.ThreadingUnixStreamServer(mrtgElecServerAddress, mrtgElecSocketHandler)
-os.chmod(mrtgElecServerAddress, 0775)
-
-mrtgElecThread = threading.Thread(None, mrtgElecServer.serve_forever)
-mrtgElecThread.setDaemon(True)
-mrtgElecThread.start()
-
-mrtgTempServer = SocketServer.ThreadingUnixStreamServer(mrtgTempServerAddress, mrtgTempSocketHandler)
-os.chmod(mrtgTempServerAddress, 0775)
-
-mrtgTempThread = threading.Thread(None, mrtgTempServer.serve_forever)
-mrtgTempThread.setDaemon(True)
-mrtgTempThread.start()
-
-pachubeServer = ThreadingTCP6Server(pachubeServerAddress, pachubeSocketHandler)
-pachubeThread = threading.Thread(None, pachubeServer.serve_forever)
-pachubeThread.setDaemon(True)
-pachubeThread.start()
+httpServer = ThreadingHTTP6Server(httpServerAddress, httpRequestHandler)
+httpThread = threading.Thread(None, httpServer.serve_forever)
+httpThread.daemon = True
+httpThread.start()
 
 xmlServer = ThreadingTCP6Server(xmlServerAddress, xmlSocketHandler)
 xmlThread = threading.Thread(None, xmlServer.serve_forever)
-xmlThread.setDaemon(True)
+xmlThread.daemon = True
 xmlThread.start()
 
 serialMonitor()
