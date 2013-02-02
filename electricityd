@@ -112,13 +112,14 @@ class xmlSocketHandler(SocketServer.BaseRequestHandler):
             self.request.close()
 
 class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+    wbufsize = -1  # http://lautaportti.wordpress.com/2011/04/01/basehttprequesthandler-wastes-tcp-packets/
     valid_variables = ['temp', 'watts', 'joules']
     valid_constants = ['', '0']
     formats = {'csv':',', 'txt':'\r\n'}
     content_types = {'csv':'text/csv', 'txt': 'text/plain'}
 
     def version_string(self):
-        return 'electricityd/3.0' + ' ' + BaseHTTPServer.BaseHTTPRequestHandler.version_string(self)
+        return 'electricityd/3.1' + ' ' + BaseHTTPServer.BaseHTTPRequestHandler.version_string(self)
 
     def do_GET(self): # on each client request
         try:
