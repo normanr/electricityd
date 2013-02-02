@@ -15,30 +15,27 @@ import time
 import traceback
 
 if len(sys.argv) < 2:
-  print 'missing config filename'
-  sys.exit(1)
+    print 'missing config filename'
+    sys.exit(1)
 
 with open(sys.argv[1]) as f:
-  config = ast.literal_eval(f.read())
+    config = ast.literal_eval(f.read())
 
 config_keys = ['xmlServerAddress', 'httpServerAddress', 'powerFailScript',
                'logFile', 'serialAddr', 'serialBaud', 'serialTimeout',
                'maxLogItems']
 for key in config_keys:
-  locals()[key] = config[key]
+    assert key in config, '%r not found in config' % key
 
 clients = []
 clients_lock = threading.Lock()
-log = collections.deque([], maxLogItems)
-re_watts = re.compile('<ch1><watts>0*(\d+)</watts></ch1>')
-re_temp = re.compile('<tmpr> *([\-\d.]+)</tmpr>')
-pulseCounter = 0
-watts = 0
-joules = 0
-temp = 0
+log = collections.deque([], config['maxLogItems'])
+RE_WATTS = re.compile('<ch1><watts>0*(?P<watts>\d+)</watts></ch1>')
+RE_TEMP = re.compile('<tmpr> *(?P<temp>[\-\d.]+)</tmpr>')
+readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0}
 
 def dumpLog(state):
-    with open(logFile, 'a') as f:
+    with open(config['logFile'], 'a') as f:
         print >>f, '\n'.join(('%.1f, %.1f, %r' % x  for x in log))
         print >>f, '%.1f, %s' % (time.time(), state)
 
@@ -48,8 +45,9 @@ def sendToClients(data):
             client.put(data)
 
 def serialMonitor():
-    global pulseCounter, watts, joules, temp
-    serialPort = serial.serial_for_url(serialAddr, serialBaud, timeout=serialTimeout)
+    serialPort = serial.serial_for_url(config['serialAddr'],
+                                       baudrate=config['serialBaud'],
+                                       timeout=config['serialTimeout'])
     powerfail = False
     timeLast = 0
 
@@ -62,26 +60,26 @@ def serialMonitor():
             if powerfail:
                 powerfail = False
                 dumpLog('okay')
-                os.system(powerFailScript % 'okay')
-            pulseCounter += 1
-            match = re_watts.search(line)
+                os.system(config['powerFailScript'] % 'okay')
+            readings['lines'] += 1
+            match = RE_WATTS.search(line)
             if match:
                 timeNow = time.time()
-                if watts:
+                if readings['watts']:
                     duration = timeNow - timeLast
-                    joules += watts * duration
+                    readings['joules'] += readings['watts'] * duration
                 timeLast = timeNow
-                watts = int(match.group(1))
-            match = re_temp.search(line)
+                readings['watts'] = int(match.group('watts'))
+            match = RE_TEMP.search(line)
             if match:
-                temp = float(match.group(1))
+                readings['temp'] = float(match.group('temp'))
             sendToClients(line)
         else:
             if not powerfail:
                 powerfail = True
                 dumpLog('fail')
-                os.system(powerFailScript % 'fail')
-            watts = 0
+                os.system(config['powerFailScript'] % 'fail')
+            readings['watts'] = 0
             sendToClients('\r\n')
 
 class xmlSocketHandler(SocketServer.BaseRequestHandler):
@@ -108,16 +106,18 @@ class xmlSocketHandler(SocketServer.BaseRequestHandler):
 
 class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     wbufsize = -1  # http://lautaportti.wordpress.com/2011/04/01/basehttprequesthandler-wastes-tcp-packets/
-    valid_variables = ['temp', 'watts', 'joules']
     valid_constants = ['', '0']
     formats = {'csv':',', 'txt':'\r\n'}
     content_types = {'csv':'text/csv', 'txt': 'text/plain'}
 
     def version_string(self):
-        return 'electricityd/3.1' + ' ' + BaseHTTPServer.BaseHTTPRequestHandler.version_string(self)
+        return 'electricityd/3.2 ' + BaseHTTPServer.BaseHTTPRequestHandler.version_string(self)
 
     def do_GET(self): # on each client request
         try:
+            if '.' not in self.path:
+                return self.send_error(400, 'Invalid request')
+
             variables, fmt = self.path.lstrip('/').rsplit('.', 1)
             if fmt not in self.formats:
                 return self.send_error(400, 'Invalid format %s' % fmt)
@@ -129,27 +129,22 @@ class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                     results.append(variable)
                     continue
                 var_ops = variable.split('/')
-                variable = var_ops[0]
-                ops = var_ops[1:]
-                if not variable in self.valid_variables:
+                variable, ops = var_ops[0], var_ops[1:]
+                if not variable in readings:
                     return self.send_error(400, 'Invalid variable %s' % variable)
-                if variable:
-                    value = globals()[variable]
-                    for op in ops:
-                        if op == 'int':
-                            value = int(value)
-                        else:
-                            try:
-                                if '.' in op:
-                                    value = value / float(op)
-                                else:
-                                    value = value / int(op)
-                            except (ValueError, ZeroDivisionError) as e:
-                                return self.send_error(400, 'Invalid op %s' % op)
-                    results.append(str(value))
-                else:
-                    results.append('')
-
+                value = readings[variable]
+                for op in ops:
+                    if op == 'int':
+                        value = int(value)
+                    else:
+                        try:
+                            if '.' in op:
+                                value = value / float(op)
+                            else:
+                                value = value / int(op)
+                        except (ValueError, ZeroDivisionError) as e:
+                            return self.send_error(400, 'Invalid op %s' % op)
+                results.append(str(value))
 
             result = self.formats[fmt].join(results)
 
@@ -163,24 +158,26 @@ class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             traceback.print_exc()
             dumpLog('%s %s\n%s' % (self.client_address, self.path, traceback.format_exc()))
 
-class ThreadingHTTP6Server(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
+class IPv6Mixin:
     address_family = socket.AF_INET6
     allow_reuse_address = True
+
+class BackgroundMixin(SocketServer.ThreadingMixIn):
     daemon_threads = True
 
-class ThreadingTCP6Server(SocketServer.ThreadingTCPServer):
-    address_family = socket.AF_INET6
-    allow_reuse_address = True
-    daemon_threads = True
+    def start(self):
+        self.thread = threading.Thread(target=self.serve_forever,
+                                       name=self.__class__)
+        self.thread.daemon = True
+        self.thread.start()
 
-httpServer = ThreadingHTTP6Server(httpServerAddress, httpRequestHandler)
-httpThread = threading.Thread(None, httpServer.serve_forever)
-httpThread.daemon = True
-httpThread.start()
+class BackgroundHTTP6Server(BackgroundMixin, IPv6Mixin, BaseHTTPServer.HTTPServer): pass
+class BackgroundTCP6Server(BackgroundMixin, IPv6Mixin, SocketServer.TCPServer): pass
 
-xmlServer = ThreadingTCP6Server(xmlServerAddress, xmlSocketHandler)
-xmlThread = threading.Thread(None, xmlServer.serve_forever)
-xmlThread.daemon = True
-xmlThread.start()
+httpServer = BackgroundHTTP6Server(config['httpServerAddress'], httpRequestHandler)
+httpServer.start()
+
+xmlServer = BackgroundTCP6Server(config['xmlServerAddress'], xmlSocketHandler)
+xmlServer.start()
 
 serialMonitor()
