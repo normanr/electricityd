@@ -2,6 +2,7 @@
 
 import BaseHTTPServer
 import collections
+import ast
 import os
 import Queue
 import re
@@ -13,24 +14,18 @@ import threading
 import time
 import traceback
 
-if os.getuid() < 1000:
-  xmlServerAddress = ('',20222)
-  httpServerAddress = ('',20080)
-  powerFailScript = 'sudo -n /opt/etc/power/%s'
-  logFile = '/var/log/electricity.log'
-else:
-  xmlServerAddress = ('',20223)
-  httpServerAddress = ('',20081)
-  powerFailScript = '/bin/echo %s'
-  logFile = '/tmp/electricity.log'
-
 if len(sys.argv) < 2:
-  print 'missing address'
+  print 'missing config filename'
   sys.exit(1)
 
-serialAddr, serialBaud = sys.argv[1].split('@')
-serialTimeout = 90
-maxLogItems = 10
+with open(sys.argv[1]) as f:
+  config = ast.literal_eval(f.read())
+
+config_keys = ['xmlServerAddress', 'httpServerAddress', 'powerFailScript',
+               'logFile', 'serialAddr', 'serialBaud', 'serialTimeout',
+               'maxLogItems']
+for key in config_keys:
+  locals()[key] = config[key]
 
 clients = []
 clients_lock = threading.Lock()
