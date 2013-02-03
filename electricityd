@@ -13,9 +13,10 @@ import sys
 import threading
 import time
 import traceback
+import urllib2
 
 if len(sys.argv) < 2:
-    print 'missing config filename'
+    print >>sys.stderr, 'missing config filename'
     sys.exit(1)
 
 with open(sys.argv[1]) as f:
@@ -23,7 +24,7 @@ with open(sys.argv[1]) as f:
 
 config_keys = ['xmlServerAddress', 'httpServerAddress', 'powerFailScript',
                'logFile', 'serialAddr', 'serialBaud', 'serialTimeout',
-               'maxLogItems']
+               'maxLogItems', 'services']
 for key in config_keys:
     assert key in config, '%r not found in config' % key
 
@@ -33,6 +34,7 @@ log = collections.deque([], config['maxLogItems'])
 RE_WATTS = re.compile('<ch1><watts>0*(?P<watts>\d+)</watts></ch1>')
 RE_TEMP = re.compile('<tmpr> *(?P<temp>[\-\d.]+)</tmpr>')
 readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0}
+readings_lock = threading.Lock()
 
 def dumpLog(state):
     with open(config['logFile'], 'a') as f:
@@ -61,26 +63,87 @@ def serialMonitor():
                 powerfail = False
                 dumpLog('okay')
                 os.system(config['powerFailScript'] % 'okay')
-            readings['lines'] += 1
-            match = RE_WATTS.search(line)
-            if match:
-                timeNow = time.time()
-                if readings['watts']:
-                    duration = timeNow - timeLast
-                    readings['joules'] += readings['watts'] * duration
-                timeLast = timeNow
-                readings['watts'] = int(match.group('watts'))
-            match = RE_TEMP.search(line)
-            if match:
-                readings['temp'] = float(match.group('temp'))
+            with readings_lock:
+                readings['lines'] += 1
+                match = RE_WATTS.search(line)
+                if match:
+                    timeNow = time.time()
+                    if readings['watts']:
+                        duration = timeNow - timeLast
+                        readings['joules'] += readings['watts'] * duration
+                    timeLast = timeNow
+                    readings['watts'] = int(match.group('watts'))
+                match = RE_TEMP.search(line)
+                if match:
+                    readings['temp'] = float(match.group('temp'))
             sendToClients(line)
         else:
             if not powerfail:
                 powerfail = True
                 dumpLog('fail')
                 os.system(config['powerFailScript'] % 'fail')
-            readings['watts'] = 0
+            with readings_lock:
+                readings['watts'] = 0
             sendToClients('\r\n')
+
+class serviceThread(threading.Thread):
+
+    def __init__(self, name, settings):
+        required_settings = ['url', 'interval']
+        for key in required_settings:
+            assert key in settings, '%r not found in %r service settings' % (key, name)
+        assert settings['url'].format(**readings)
+        if 'data' in settings:
+            assert settings['data'].format(**readings)
+        self.settings = settings
+
+        threading.Thread.__init__(self, name=name)
+        self.daemon = True
+        self.start()
+
+    def run(self):
+        self.waitForFirstReading()
+        self.sendReadings()
+
+    def waitForFirstReading(self):
+        queue = Queue.Queue()
+        with clients_lock:
+            clients.append(queue)
+        try:
+            while True:
+                queue.get()
+                queue.task_done()
+                with readings_lock:
+                    if readings['watts']:
+                        break
+        finally:
+            with clients_lock:
+                clients.remove(queue)
+
+    def sendReadings(self):
+        timeStart = time.time()
+        while True:
+            try:
+                self.sendSingleReading()
+            except Exception as e:
+                msg = '%s\n%s' % (self.name, traceback.format_exc())
+                print >>sys.stderr, msg
+                dumpLog(msg)
+
+            while timeStart < time.time():
+                timeStart += self.settings['interval']
+            time.sleep(timeStart - time.time())
+
+    def sendSingleReading(self):
+        url = self.settings['url'].format(**readings)
+        kwargs = {}
+        if 'data' in self.settings:
+            kwargs['data'] = self.settings['data'].format(**readings)
+        if 'headers' in self.settings:
+            kwargs['headers'] = self.settings['headers']
+        request = urllib2.Request(url, **kwargs)
+        timeout = self.settings.get('timeout', 10)
+        response = urllib2.urlopen(request, timeout=timeout)
 
 class xmlSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
@@ -89,7 +152,7 @@ class xmlSocketHandler(SocketServer.BaseRequestHandler):
         with clients_lock:
             clients.append(queue)
         try:
-            while 1:
+            while True:
                 data = queue.get()
                 self.request.send(data)
                 queue.task_done()
@@ -130,9 +193,10 @@ class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                     continue
                 var_ops = variable.split('/')
                 variable, ops = var_ops[0], var_ops[1:]
-                if not variable in readings:
-                    return self.send_error(400, 'Invalid variable %s' % variable)
-                value = readings[variable]
+                with readings_lock:
+                    if not variable in readings:
+                        return self.send_error(400, 'Invalid variable %s' % variable)
+                    value = readings[variable]
                 for op in ops:
                     if op == 'int':
                         value = int(value)
@@ -155,8 +219,9 @@ class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             self.wfile.write(result + '\r\n')
         except Exception as e:
             self.send_error(500)
-            traceback.print_exc()
-            dumpLog('%s %s\n%s' % (self.client_address, self.path, traceback.format_exc()))
+            msg = '%s %s\n%s' % (self.client_address, self.path, traceback.format_exc())
+            print >>sys.stderr, msg
+            dumpLog(msg)
 
 class IPv6Mixin:
     address_family = socket.AF_INET6
@@ -167,7 +232,7 @@ class BackgroundMixin(SocketServer.ThreadingMixIn):
 
     def start(self):
         self.thread = threading.Thread(target=self.serve_forever,
-                                       name=self.__class__)
+                                       name=self.__class__.__name__)
         self.thread.daemon = True
         self.thread.start()
 
@@ -179,5 +244,10 @@ httpServer.start()
 
 xmlServer = BackgroundTCP6Server(config['xmlServerAddress'], xmlSocketHandler)
 xmlServer.start()
+
+services = []
+for name, settings in config['services'].iteritems():
+  if settings.get('enabled', True):
+    services.append(serviceThread(name, settings))
 
 serialMonitor()
