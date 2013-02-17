@@ -1,5 +1,7 @@
 #!/usr/bin/python
 
+__version__ = '3.3'
+
 import BaseHTTPServer
 import collections
 import ast
@@ -22,24 +24,26 @@ if len(sys.argv) < 2:
 with open(sys.argv[1]) as f:
     config = ast.literal_eval(f.read())
 
-config_keys = ['xmlServerAddress', 'httpServerAddress', 'powerFailScript',
-               'logFile', 'serialAddr', 'serialBaud', 'serialTimeout',
-               'maxLogItems', 'services']
+config_keys = ['xmlServerAddress', 'httpServerAddress', 'serialAddr',
+               'serialBaud', 'serialTimeout', 'powerFailScript',
+               'logFile', 'logTimeFormat', 'maxLogItems', 'services']
 for key in config_keys:
     assert key in config, '%r not found in config' % key
 
 clients = []
 clients_lock = threading.Lock()
 log = collections.deque([], config['maxLogItems'])
+log_lock = threading.Lock()
 RE_WATTS = re.compile('<ch1><watts>0*(?P<watts>\d+)</watts></ch1>')
 RE_TEMP = re.compile('<tmpr> *(?P<temp>[\-\d.]+)</tmpr>')
 readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0}
 readings_lock = threading.Lock()
 
 def dumpLog(state):
-    with open(config['logFile'], 'a') as f:
-        print >>f, '\n'.join(('%.1f, %.1f, %r' % x  for x in log))
-        print >>f, '%.1f, %s' % (time.time(), state)
+    with log_lock, open(config['logFile'], 'a') as f:
+        for ts, rd, line in log:
+            print >>f, '%s %.1f %r' % (time.strftime(config['logTimeFormat'], time.localtime(ts)), rd, line)
+        print >>f, '%s %s' % (time.strftime(config['logTimeFormat']), state)
 
 def sendToClients(data):
     with clients_lock:
@@ -57,7 +61,8 @@ def serialMonitor():
         timeStart = time.time()
         line = serialPort.readline()
         readDuration = time.time() - timeStart
-        log.append((timeStart, readDuration, line))
+        with log_lock:
+            log.append((timeStart, readDuration, line))
         if line:
             if powerfail:
                 powerfail = False
@@ -125,8 +130,14 @@ class serviceThread(threading.Thread):
         while True:
             try:
                 self.sendSingleReading()
+            except urllib2.URLError as e:
+                sendDuration = time.time() - timeStart
+                msg = '%.1f %s %s' % (sendDuration, self.name, e)
+                print >>sys.stderr, msg
+                dumpLog(msg)
             except Exception as e:
-                msg = '%s\n%s' % (self.name, traceback.format_exc())
+                sendDuration = time.time() - timeStart
+                msg = '%.1f %s %s' % (sendDuration, self.name, traceback.format_exc())
                 print >>sys.stderr, msg
                 dumpLog(msg)
 
@@ -136,11 +147,16 @@ class serviceThread(threading.Thread):
 
     def sendSingleReading(self):
         url = self.settings['url'].format(**readings)
-        kwargs = {}
+        kwargs = {
+            'headers': {
+                'User-Agent': 'Python-urllib/%s electricityd/%s' % (
+                    urllib2.__version__, __version__)
+            }
+        }
         if 'data' in self.settings:
             kwargs['data'] = self.settings['data'].format(**readings)
         if 'headers' in self.settings:
-            kwargs['headers'] = self.settings['headers']
+            kwargs['headers'].update(self.settings['headers'])
         request = urllib2.Request(url, **kwargs)
         timeout = self.settings.get('timeout', 10)
         response = urllib2.urlopen(request, timeout=timeout)
@@ -174,7 +190,9 @@ class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     content_types = {'csv':'text/csv', 'txt': 'text/plain'}
 
     def version_string(self):
-        return 'electricityd/3.2 ' + BaseHTTPServer.BaseHTTPRequestHandler.version_string(self)
+        return 'electricityd/%s %s' % (
+            __version__,
+            BaseHTTPServer.BaseHTTPRequestHandler.version_string(self))
 
     def do_GET(self): # on each client request
         try:
@@ -219,7 +237,7 @@ class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
             self.wfile.write(result + '\r\n')
         except Exception as e:
             self.send_error(500)
-            msg = '%s %s\n%s' % (self.client_address, self.path, traceback.format_exc())
+            msg = '%s %s %s' % (self.client_address, self.path, traceback.format_exc())
             print >>sys.stderr, msg
             dumpLog(msg)
 
