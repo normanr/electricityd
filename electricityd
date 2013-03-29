@@ -43,6 +43,7 @@ def dumpLog(state):
     with log_lock, open(config['logFile'], 'a') as f:
         for ts, rd, line in log:
             print >>f, '%s %.1f %r' % (time.strftime(config['logTimeFormat'], time.localtime(ts)), rd, line)
+        log.clear()
         print >>f, '%s %s' % (time.strftime(config['logTimeFormat']), state)
 
 def sendToClients(data):
@@ -143,7 +144,7 @@ class serviceThread(threading.Thread):
 
             while timeStart < time.time():
                 timeStart += self.settings['interval']
-            time.sleep(timeStart - time.time())
+            time.sleep(max(timeStart - time.time(), 0))
 
     def sendSingleReading(self):
         url = self.settings['url'].format(**readings)
