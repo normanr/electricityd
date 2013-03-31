@@ -10,6 +10,7 @@ import os
 import Queue
 import re
 import serial
+import SimpleHTTPServer
 import socket
 import SocketServer
 import sys
@@ -25,11 +26,13 @@ if len(sys.argv) < 2:
 with open(sys.argv[1]) as f:
     config = ast.literal_eval(f.read())
 
-config_keys = ['xmlServerAddress', 'httpServerAddress', 'serialAddr',
+config_keys = ['xmlServerAddress', 'httpServerAddress', 'httpServerRoot', 'serialAddr',
                'serialBaud', 'serialTimeout', 'powerFailScript',
                'logFile', 'logTimeFormat', 'maxLogItems', 'services']
 for key in config_keys:
     assert key in config, '%r not found in config' % key
+
+os.chdir(config['httpServerRoot'])
 
 clients = []
 clients_lock = threading.Lock()
@@ -185,23 +188,29 @@ class xmlSocketHandler(SocketServer.BaseRequestHandler):
                 clients.remove(queue)
             self.request.close()
 
-class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     wbufsize = -1  # http://lautaportti.wordpress.com/2011/04/01/basehttprequesthandler-wastes-tcp-packets/
     valid_constants = ['', '0']
 
     def version_string(self):
         return 'electricityd/%s %s' % (
             __version__,
-            BaseHTTPServer.BaseHTTPRequestHandler.version_string(self))
+            SimpleHTTPServer.SimpleHTTPRequestHandler.version_string(self))
 
     def do_GET(self): # on each client request
         try:
+            path = self.translate_path(self.path)
+            if os.path.isfile(path) or path == config['httpServerRoot']:
+                return SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
             self.handleVariableResponse()
         except Exception as e:
             self.send_error(500)
             msg = '%s %s %s' % (self.client_address, self.path, traceback.format_exc())
             print >>sys.stderr, msg
             dumpLog(msg)
+
+    def list_directory(self, path):
+        return self.send_error(404, "No permission to list directory")
 
     def formatAsCsv(self, results):
         return 'text/csv', ','.join((v for k,v in results))
