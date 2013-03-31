@@ -5,6 +5,7 @@ __version__ = '3.3'
 import BaseHTTPServer
 import collections
 import ast
+import json
 import os
 import Queue
 import re
@@ -187,8 +188,6 @@ class xmlSocketHandler(SocketServer.BaseRequestHandler):
 class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     wbufsize = -1  # http://lautaportti.wordpress.com/2011/04/01/basehttprequesthandler-wastes-tcp-packets/
     valid_constants = ['', '0']
-    formats = {'csv':',', 'txt':'\r\n'}
-    content_types = {'csv':'text/csv', 'txt': 'text/plain'}
 
     def version_string(self):
         return 'electricityd/%s %s' % (
@@ -197,50 +196,64 @@ class httpRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
     def do_GET(self): # on each client request
         try:
-            if '.' not in self.path:
-                return self.send_error(400, 'Invalid request')
-
-            variables, fmt = self.path.lstrip('/').rsplit('.', 1)
-            if fmt not in self.formats:
-                return self.send_error(400, 'Invalid format %s' % fmt)
-
-            variables = variables.split(',')
-            results = []
-            for variable in variables:
-                if variable in self.valid_constants:
-                    results.append(variable)
-                    continue
-                var_ops = variable.split('/')
-                variable, ops = var_ops[0], var_ops[1:]
-                with readings_lock:
-                    if not variable in readings:
-                        return self.send_error(400, 'Invalid variable %s' % variable)
-                    value = readings[variable]
-                for op in ops:
-                    if op == 'int':
-                        value = int(value)
-                    else:
-                        try:
-                            if '.' in op:
-                                value = value / float(op)
-                            else:
-                                value = value / int(op)
-                        except (ValueError, ZeroDivisionError) as e:
-                            return self.send_error(400, 'Invalid op %s' % op)
-                results.append(str(value))
-
-            result = self.formats[fmt].join(results)
-
-            self.send_response(200, 'OK')
-            self.send_header("Content-Type", self.content_types[fmt])
-            self.send_header('Connection', 'close')
-            self.end_headers()
-            self.wfile.write(result + '\r\n')
+            self.handleVariableResponse()
         except Exception as e:
             self.send_error(500)
             msg = '%s %s %s' % (self.client_address, self.path, traceback.format_exc())
             print >>sys.stderr, msg
             dumpLog(msg)
+
+    def formatAsCsv(self, results):
+        return 'text/csv', ','.join((v for k,v in results))
+
+    def formatAsJson(self, results):
+        return 'application/json', json.dumps(dict(results))
+
+    def formatAsTxt(self, results):
+        return 'text/plain', '\r\n'.join((v for k,v in results))
+
+    def handleVariableResponse(self):
+        if '.' not in self.path:
+            return self.send_error(400, 'Invalid request')
+
+        variables, fmt = self.path.lstrip('/').rsplit('.', 1)
+        formatter = getattr(self, 'formatAs%s' % fmt.title(), None)
+        if not formatter:
+            return self.send_error(400, 'Invalid format %s' % fmt)
+
+        variables = variables.split(',')
+        with readings_lock:
+            local_readings = readings.copy()
+        results = []
+        for variable in variables:
+            if variable in self.valid_constants:
+                results.append(variable)
+                continue
+            var_ops = variable.split('/')
+            variable, ops = var_ops[0], var_ops[1:]
+            if not variable in local_readings:
+                return self.send_error(400, 'Invalid variable %s' % variable)
+            value = local_readings[variable]
+            for op in ops:
+                if op == 'int':
+                    value = int(value)
+                else:
+                    try:
+                        if '.' in op:
+                            value = value / float(op)
+                        else:
+                            value = value / int(op)
+                    except (ValueError, ZeroDivisionError) as e:
+                        return self.send_error(400, 'Invalid op %s' % op)
+            results.append(str(value))
+
+        content_type, result = formatter(zip(variables, results))
+
+        self.send_response(200, 'OK')
+        self.send_header("Content-Type", content_type)
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(result + '\r\n')
 
 class IPv6Mixin:
     address_family = socket.AF_INET6
