@@ -1,0 +1,2 @@
+RewriteEngine on
+RewriteRule ^log$ http://localhost:20080/log?ip=%{REMOTE_HOST} [QSA,P]

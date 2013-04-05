@@ -1,0 +1,23 @@
+body {
+  background-color: silver;
+  font-size: 48px;
+  font-family: sans-serif;
+}
+
+hr {
+  border-color: black;
+  margin: 5px;
+}
+
+.reading {
+  font-size: 64px;
+  font-family: monospace;
+  font-weight: bold;
+  white-space: pre;
+}
+
+#log {
+  font-size: medium;
+  font-family: monospace;
+  white-space: pre;
+}
