@@ -5,6 +5,7 @@ __version__ = '3.3'
 import BaseHTTPServer
 import collections
 import ast
+import httplib
 import json
 import os
 import Queue
@@ -137,11 +138,6 @@ class serviceThread(threading.Thread):
         while True:
             try:
                 self.sendSingleReading()
-            except urllib2.URLError as e:
-                sendDuration = time.time() - timeStart
-                msg = '%.1f %s %s' % (sendDuration, self.name, e)
-                print >>sys.stderr, msg
-                dumpLog(msg)
             except Exception as e:
                 sendDuration = time.time() - timeStart
                 msg = '%.1f %s %s' % (sendDuration, self.name, traceback.format_exc())
@@ -166,7 +162,16 @@ class serviceThread(threading.Thread):
             kwargs['headers'].update(self.settings['headers'])
         request = urllib2.Request(url, **kwargs)
         timeout = self.settings.get('timeout', 10)
-        response = urllib2.urlopen(request, timeout=timeout)
+        timeStart = time.time()
+        try:
+            response = urllib2.urlopen(request, timeout=timeout)
+        except (httplib.HTTPException, socket.timeout, urllib2.URLError) as e:
+            sendDuration = time.time() - timeStart
+            msg = '%.1f %s %s.%s %s' % (
+                sendDuration, self.name,
+                e.__class__.__module__, e.__class__.__name__, e)
+            print >>sys.stderr, msg
+            dumpLog(msg)
 
 class xmlSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
