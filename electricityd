@@ -176,6 +176,12 @@ class serviceThread(threading.Thread):
 class xmlSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
         self.request.setblocking(0)
+
+        with log_lock:
+            local_log = list(log)
+        for ts, d, data in local_log:
+            self.request.send(data)
+
         queue = Queue.Queue()
         with clients_lock:
             clients.append(queue)
