@@ -1,10 +1,12 @@
 #!/usr/bin/python
 
-__version__ = '3.3'
+__version__ = '3.4'
 
 import BaseHTTPServer
 import collections
 import ast
+import datetime
+import gviz_api
 import httplib
 import json
 import os
@@ -43,8 +45,18 @@ log = collections.deque([], config['maxLogItems'])
 log_lock = threading.Lock()
 RE_WATTS = re.compile('<ch1><watts>0*(?P<watts>\d+)</watts></ch1>')
 RE_TEMP = re.compile('<tmpr> *(?P<temp>[\-\d.]+)</tmpr>')
+RE_HIST = re.compile('<hist>.*<\/hist>');
+RE_HIST_DATA = re.compile('<data><sensor>(?P<sensor>[^>]*)<\/sensor>(?P<data>.*?)<\/data>');
+RE_HIST_VALUE = re.compile('<(?P<unit>[hdm])(?P<duration>[0-9]{3})>(?P<value>[^<]*)');
+
 readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0}
 readings_lock = threading.Lock()
+# key: duration (h/m/d), key: offset (numeric), value: 10 element list of float
+history = collections.defaultdict(
+    lambda: collections.defaultdict(
+        lambda: [None] * 10)
+    )
+history_lock = threading.Lock()
 
 def dumpLog(state):
     with log_lock, open(config['logFile'], 'a') as f:
@@ -80,6 +92,16 @@ class serialMonitor(object):
                 match = RE_TEMP.search(line)
                 if match:
                     readings['temp'] = float(match.group('temp'))
+            match = RE_HIST.search(line)
+            if match:
+                with history_lock:
+                    for data in RE_HIST_DATA.finditer(match.group(0)):
+                        sensor = int(data.group('sensor'))
+                        for value in RE_HIST_VALUE.finditer(data.group('data')):
+                            unit = value.group('unit')
+                            duration = int(value.group('duration'), 10)
+                            value = float(value.group('value'))
+                            history[unit][duration][sensor] = value
 
     def watch(self):
         powerfail = False
@@ -227,6 +249,8 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                     return
             if url.path == '/log':
                 self.handleLogResponse(urlparse.parse_qs(url.query))
+            elif url.path == '/hist.gviz':
+                self.handleHistoryResponse(urlparse.parse_qs(url.query))
             else:
                 self.handleVariableResponse(url.path)
         except Exception as e:
@@ -237,6 +261,60 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 
     def list_directory(self, path):
         self.send_error(404, 'No permission to list directory')
+
+    unit_map = {
+        'h': ('hours', 1),
+        'd': ('days', 1),
+        'm': ('days', 30),
+    }
+
+    def handleHistoryResponse(self, query):
+        try:
+            unit = query.get('unit', '')[0]
+        except IndexError:
+            unit = ''
+
+        try:
+            tqx = query.get('tqx', '')[0]
+        except IndexError:
+            tqx = ''
+
+        sensors = [int(x) for x in query.get('sensor', '')]
+
+        convert = self.unit_map[unit]
+        def mapTime(time):
+            t = datetime.datetime.now()
+            d = datetime.timedelta(**{convert[0]: time * convert[1]})
+            return t - d
+
+        def mapRow(row):
+            return [row[s] for s in sensors]
+
+        def mapTable(table):
+            items = ([mapTime(k)] + mapRow(v) for k, v in table.iteritems())
+            return sorted(items)
+
+        with history_lock:
+            data = {unit:mapTable(history[unit]) for unit in self.unit_map}
+
+        if unit not in data:
+            self.send_error(400, 'Invalid request')
+            return
+
+        schema = [('', 'datetime')]
+        for sensor in sensors:
+            schema.append(('Sensor %d' % sensor, 'number'))
+
+        table = gviz_api.DataTable(schema)
+        table.LoadData(data[unit])
+
+        result = table.ToResponse(tqx=tqx)
+
+        self.send_response(200, 'OK')
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(result + '\r\n')
 
     def handleLogResponse(self, query):
         try:

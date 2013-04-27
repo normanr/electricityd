@@ -16,6 +16,10 @@ hr {
   white-space: pre;
 }
 
+#charts > div {
+  width: 99%;
+}
+
 #error {
   font-size: medium;
   color: red;

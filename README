@@ -1,2 +1,6 @@
+Requirements:
+  Python 2.7
+  http://code.google.com/p/google-visualization-python/
+
 USAGE:
   electricityd electricityd.conf

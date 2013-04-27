@@ -35,6 +35,59 @@ function updateReadings(timestamp) {
   });
 }
 
+function updateHistory() {
+  var units = ['h', 'd', 'm'];
+  for (var i in units) {
+    var unit = units[i];
+
+    var wrapper = new google.visualization.ChartWrapper({
+      chartType: 'LineChart',
+      containerId: 'chart_' + unit,
+      dataSourceUrl: 'hist.gviz?sensor=0&unit=' + unit,
+      // refreshInterval: 30,  // requires tqrt=scriptInjection as part of url
+      options: {
+        backgroundColor: { fill: 'none' },
+        colors: ['black'],
+        hAxis: {
+          baselineColor: 'none',
+          gridlines: { color: 'none' },
+        },
+        legend: 'none',
+        theme: 'maximized',
+        vAxis: {
+          baselineColor: 'none',
+          gridlines: { color: 'none' },
+          minValue: 0,
+          title: 'kWh/' + unit,
+        },
+      },
+    });
+
+    google.visualization.events.addListener(wrapper, 'error', function(e) {
+      msg = 'History update failed, refresh to resume.';
+      if (e.message) {
+        error = 'Error in query: ' + e.message;
+        msg = 'Request failed: ' + error + '.  ' + msg;
+      }
+      $('#error').prepend($('<span>').text(msg + '\n'));
+    });
+
+    wrapper.draw();
+  };
+}
+
+function loadModules() {
+  // Load the Visualization API, the corechart package and set a callback.
+  google.load('visualization', '1.0', {'packages':['corechart'], 'callback': updateHistory});
+}
+
+function initLoader() {
+  var script = document.createElement("script");
+  script.src = "//www.google.com/jsapi?callback=loadModules";
+  document.getElementsByTagName("head")[0].appendChild(script);
+}
+
 $(function() {
+  initLoader();
   updateReadings();
 });
