@@ -31,7 +31,7 @@ function updateReadings(timestamp) {
       if (error) {
         msg = 'Request failed: ' + error + '.  ' + msg
       }
-      $('#log').prepend($('<span>').text(msg + '\n'));
+      $('#error').prepend($('<span>').text(msg + '\n'));
   });
 }
 

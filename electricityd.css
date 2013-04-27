@@ -16,6 +16,11 @@ hr {
   white-space: pre;
 }
 
+#error {
+  font-size: medium;
+  color: red;
+}
+
 #log {
   font-size: medium;
   font-family: monospace;
