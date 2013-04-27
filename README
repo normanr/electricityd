@@ -2,5 +2,9 @@ Requirements:
   Python 2.7
   http://code.google.com/p/google-visualization-python/
 
+For Debian:
+  $ apt-get install python-pip
+  $ pip install -U -f http://code.google.com/p/google-visualization-python/ gviz-api-py
+
 USAGE:
   electricityd electricityd.conf
