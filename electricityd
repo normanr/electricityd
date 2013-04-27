@@ -53,51 +53,58 @@ def dumpLog(state):
         log.clear()
         print >>f, '%s %s' % (time.strftime(config['logTimeFormat']), state)
 
-def sendToClients(data):
-    with clients_lock:
-        for client in clients:
-            client.put(data)
+class serialMonitor(object):
 
-def serialMonitor():
-    serialPort = serial.serial_for_url(config['serialAddr'],
-                                       baudrate=config['serialBaud'],
-                                       timeout=config['serialTimeout'])
-    powerfail = False
-    timeLast = 0
+    def __init__(self):
+        self.serialPort = serial.serial_for_url(config['serialAddr'],
+                                                baudrate=config['serialBaud'],
+                                                timeout=config['serialTimeout'])
+        self.timeLast = 0
 
-    while True:
-        timeStart = time.time()
-        line = serialPort.readline()
-        readDuration = time.time() - timeStart
-        with log_lock:
-            log.append((timeStart, readDuration, line))
-        if line:
-            if powerfail:
-                powerfail = False
-                dumpLog('okay')
-                os.system(config['powerFailScript'] % 'okay')
+    def sendToClients(self, data):
+        with clients_lock:
+            for client in clients:
+                client.put(data)
+
+    def parseLine(self, line):
             with readings_lock:
                 readings['lines'] += 1
                 match = RE_WATTS.search(line)
                 if match:
                     timeNow = time.time()
                     if readings['watts']:
-                        duration = timeNow - timeLast
+                        duration = timeNow - self.timeLast
                         readings['joules'] += readings['watts'] * duration
-                    timeLast = timeNow
+                    self.timeLast = timeNow
                     readings['watts'] = int(match.group('watts'))
                 match = RE_TEMP.search(line)
                 if match:
                     readings['temp'] = float(match.group('temp'))
-            sendToClients(line)
-        else:
-            if not powerfail:
-                powerfail = True
-                dumpLog('fail')
-                os.system(config['powerFailScript'] % 'fail')
-            with readings_lock:
-                readings['watts'] = 0
-            sendToClients('\r\n')
+
+    def watch(self):
+        powerfail = False
+        while True:
+            timeStart = time.time()
+            line = self.serialPort.readline()
+            if line:
+                timeEnd = time.time()
+                readDuration = timeEnd - timeStart
+                with log_lock:
+                    log.append((timeEnd, readDuration, line))
+                if powerfail:
+                    powerfail = False
+                    dumpLog('okay')
+                    os.system(config['powerFailScript'] % 'okay')
+                self.parseLine(line)
+                self.sendToClients(line)
+            else:
+                if not powerfail:
+                    powerfail = True
+                    dumpLog('fail')
+                    os.system(config['powerFailScript'] % 'fail')
+                with readings_lock:
+                    readings['watts'] = 0
+                self.sendToClients('\r\n')
 
 class serviceThread(threading.Thread):
 
@@ -358,4 +365,4 @@ for name, settings in config['services'].iteritems():
   if settings.get('enabled', True):
     services.append(serviceThread(name, settings))
 
-serialMonitor()
+serialMonitor().watch()
