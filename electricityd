@@ -254,13 +254,19 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                 with clients_lock:
                     clients.remove(queue)
 
-        with log_lock:
-            local_log = list(log)
-        data = [x for x in local_log if x[0] > ts]
+            with log_lock:
+                local_log = list(log)
+            data = [x for x in local_log if x[0] > ts]
+
+        delay = 6
+        if data:
+            ts = data[-1][0]
+            delay = ts - time.time() + 6
 
         result = json.dumps({
-            'log': data,
-            'now': time.time(),
+            'log': [x[2] for x in data],
+            'ts': ts,
+            'delay': delay,
         })
 
         self.send_response(200, 'OK')

@@ -2,17 +2,12 @@ var re_watts = /<ch1><watts>(0*)(\d+)<\/watts><\/ch1>/;
 var re_temp = /<tmpr> *([\-\d.]+)<\/tmpr>/;
 var re_time = /<time>([\-\d:]+)<\/time>/;
 
-function update(lastTimestamp) {
-  $.get('log', {'ts': lastTimestamp}, function(data) {
+function updateReadings(timestamp) {
+  $.get('log', {'ts': timestamp}, function(data) {
     output = '';
-    sleep = 6000;
     log = data['log'];
-    now = data['now'];
     for (i in log) {
-      entry = log[i];
-      read_start = entry[0];
-      read_duration = entry[1];
-      line = entry[2];
+      line = log[i];
       var watts = re_watts.exec(line);
       if (watts) {
         $('#watts').text(watts[1].replace(/0/g, ' ') + watts[2]);
@@ -25,17 +20,12 @@ function update(lastTimestamp) {
       if (time) {
         $('#time').text(time[1]);
       }
-      read_end = read_start + read_duration;
-      // current cost generates a new reading every 6 seconds.
-      sleep = read_end - now + 6;
-      //line = sleep + ',' + line;
       output = line + output;
-      lastTimestamp = read_start;
     }
     if (output && window.location.hash) {
       $('#log').prepend($('<span>').text(output));
     }
-    setTimeout(update, sleep * 1000, lastTimestamp);
+    setTimeout(updateReadings, data['delay'] * 1000, data['ts']);
   }).fail(function(xhr, status, error) {
       msg = 'Updates paused, refresh to resume.';
       if (error) {
@@ -46,5 +36,5 @@ function update(lastTimestamp) {
 }
 
 $(function() {
-    update();
+  updateReadings();
 });
