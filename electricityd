@@ -134,9 +134,10 @@ class serviceThread(threading.Thread):
         required_settings = ['url', 'interval']
         for key in required_settings:
             assert key in settings, '%r not found in %r service settings' % (key, name)
-        assert settings['url'].format(**readings)
-        if 'data' in settings:
-            assert settings['data'].format(**readings)
+        with readings_lock:
+            assert settings['url'].format(**readings)
+            if 'data' in settings:
+                assert settings['data'].format(**readings)
         self.settings = settings
 
         threading.Thread.__init__(self, name=name)
@@ -178,7 +179,9 @@ class serviceThread(threading.Thread):
             time.sleep(max(timeStart - time.time(), 0))
 
     def sendSingleReading(self):
-        url = self.settings['url'].format(**readings)
+        with readings_lock:
+            local_readings = readings.copy()
+        url = self.settings['url'].format(**local_readings)
         kwargs = {
             'headers': {
                 'User-Agent': 'Python-urllib/%s electricityd/%s' % (
@@ -186,7 +189,7 @@ class serviceThread(threading.Thread):
             }
         }
         if 'data' in self.settings:
-            kwargs['data'] = self.settings['data'].format(**readings)
+            kwargs['data'] = self.settings['data'].format(**local_readings)
         if 'headers' in self.settings:
             kwargs['headers'].update(self.settings['headers'])
         request = urllib2.Request(url, **kwargs)
