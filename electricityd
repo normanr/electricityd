@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-__version__ = '3.4'
+__version__ = '3.5'
 
 import BaseHTTPServer
 import collections
@@ -10,6 +10,7 @@ import gviz_api
 import httplib
 import json
 import os
+import prctl
 import Queue
 import re
 import serial
@@ -145,6 +146,7 @@ class serviceThread(threading.Thread):
         self.start()
 
     def run(self):
+        prctl.set_name('srv:i:%s' % self.name)
         self.waitForFirstReading()
         self.sendReadings()
 
@@ -167,8 +169,10 @@ class serviceThread(threading.Thread):
         timeStart = time.time()
         while True:
             try:
+                prctl.set_name('srv:s:%s' % self.name)
                 self.sendSingleReading()
             except Exception as e:
+                prctl.set_name('srv:e:%s' % self.name)
                 sendDuration = time.time() - timeStart
                 msg = '%.1f %s %s' % (sendDuration, self.name, traceback.format_exc())
                 print >>sys.stderr, msg
@@ -176,6 +180,7 @@ class serviceThread(threading.Thread):
 
             while timeStart < time.time():
                 timeStart += self.settings['interval']
+            prctl.set_name('srv:w:%s' % self.name)
             time.sleep(max(timeStart - time.time(), 0))
 
     def sendSingleReading(self):
@@ -207,6 +212,7 @@ class serviceThread(threading.Thread):
 
 class xmlSocketHandler(SocketServer.BaseRequestHandler):
     def handle(self): # on each client connect
+        prctl.set_name('xml:%s' % self.request.getpeername()[0])
         self.request.setblocking(0)
 
         with log_lock:
@@ -426,20 +432,23 @@ class IPv6Mixin:
 class BackgroundMixin(SocketServer.ThreadingMixIn):
     daemon_threads = True
 
-    def start(self):
-        self.thread = threading.Thread(target=self.serve_forever,
-                                       name=self.__class__.__name__)
+    def start(self, name):
+        self.thread = threading.Thread(target=self.run, name=name)
         self.thread.daemon = True
         self.thread.start()
+
+    def run(self):
+        prctl.set_name(self.thread.name)
+        self.serve_forever()
 
 class BackgroundHTTP6Server(BackgroundMixin, IPv6Mixin, BaseHTTPServer.HTTPServer): pass
 class BackgroundTCP6Server(BackgroundMixin, IPv6Mixin, SocketServer.TCPServer): pass
 
 httpServer = BackgroundHTTP6Server(config['httpServerAddress'], httpRequestHandler)
-httpServer.start()
+httpServer.start('httpserver')
 
 xmlServer = BackgroundTCP6Server(config['xmlServerAddress'], xmlSocketHandler)
-xmlServer.start()
+xmlServer.start('xmlserver')
 
 services = []
 for name, settings in config['services'].iteritems():
