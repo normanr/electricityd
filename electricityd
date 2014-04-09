@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-__version__ = '3.5'
+__version__ = '3.6'
 
 import BaseHTTPServer
 import collections
@@ -368,6 +368,9 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         self.send_header('Connection', 'close')
         self.end_headers()
         self.wfile.write(result + '\r\n')
+
+    def formatAsCacti(self, results):
+        return 'text/plain', ' '.join(('%s:%s' % kv for kv in results))
 
     def formatAsCsv(self, results):
         return 'text/csv', ','.join((v for k,v in results))
