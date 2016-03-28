@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-__version__ = '3.6'
+from __future__ import division
 
 import BaseHTTPServer
 import collections
@@ -24,6 +24,8 @@ import traceback
 import urllib2
 import urlparse
 
+__version__ = '4.0'
+
 if len(sys.argv) < 2:
     print >>sys.stderr, 'missing config filename'
     sys.exit(1)
@@ -44,11 +46,6 @@ clients = []
 clients_lock = threading.Lock()
 log = collections.deque([], config['maxLogItems'])
 log_lock = threading.Lock()
-RE_WATTS = re.compile('<ch1><watts>0*(?P<watts>\d+)</watts></ch1>')
-RE_TEMP = re.compile('<tmpr> *(?P<temp>[\-\d.]+)</tmpr>')
-RE_HIST = re.compile('<hist>.*<\/hist>');
-RE_HIST_DATA = re.compile('<data><sensor>(?P<sensor>[^>]*)<\/sensor>(?P<data>.*?)<\/data>');
-RE_HIST_VALUE = re.compile('<(?P<unit>[hdm])(?P<duration>[0-9]{3})>(?P<value>[^<]*)');
 
 readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0}
 readings_lock = threading.Lock()
@@ -68,41 +65,18 @@ def dumpLog(state):
 
 class serialMonitor(object):
 
-    def __init__(self):
-        self.serialPort = serial.serial_for_url(config['serialAddr'],
-                                                baudrate=config['serialBaud'],
-                                                timeout=config['serialTimeout'])
+    def __init__(self, config, parser):
+        self.config = config
+        self.parser = parser
+        self.serialPort = serial.serial_for_url(self.config['serialAddr'],
+                                                baudrate=self.config['serialBaud'],
+                                                timeout=self.config['serialTimeout'])
         self.timeLast = 0
 
     def sendToClients(self, data):
         with clients_lock:
             for client in clients:
                 client.put(data)
-
-    def parseLine(self, line):
-            with readings_lock:
-                readings['lines'] += 1
-                match = RE_WATTS.search(line)
-                if match:
-                    timeNow = time.time()
-                    if readings['watts']:
-                        duration = timeNow - self.timeLast
-                        readings['joules'] += readings['watts'] * duration
-                    self.timeLast = timeNow
-                    readings['watts'] = int(match.group('watts'))
-                match = RE_TEMP.search(line)
-                if match:
-                    readings['temp'] = float(match.group('temp'))
-            match = RE_HIST.search(line)
-            if match:
-                with history_lock:
-                    for data in RE_HIST_DATA.finditer(match.group(0)):
-                        sensor = int(data.group('sensor'))
-                        for value in RE_HIST_VALUE.finditer(data.group('data')):
-                            unit = value.group('unit')
-                            duration = int(value.group('duration'), 10)
-                            value = float(value.group('value'))
-                            history[unit][duration][sensor] = value
 
     def watch(self):
         powerfail = False
@@ -117,17 +91,78 @@ class serialMonitor(object):
                 if powerfail:
                     powerfail = False
                     dumpLog('okay')
-                    os.system(config['powerFailScript'] % 'okay')
-                self.parseLine(line)
+                    os.system(self.config['powerFailScript'] % 'okay')
+                self.parser.parseLine(line)
                 self.sendToClients(line)
             else:
                 if not powerfail:
                     powerfail = True
                     dumpLog('fail')
-                    os.system(config['powerFailScript'] % 'fail')
+                    os.system(self.config['powerFailScript'] % 'fail')
                 with readings_lock:
                     readings['watts'] = 0
                 self.sendToClients('\r\n')
+
+class parser(object):
+
+    def parseLine(self, line):
+        raise NotImplementedError()
+
+class currentcostEnviParser(parser):
+
+    RE_WATTS = re.compile('<ch1><watts>0*(?P<watts>\d+)</watts></ch1>')
+    RE_TEMP = re.compile('<tmpr> *(?P<temp>[\-\d.]+)</tmpr>')
+    RE_HIST = re.compile('<hist>.*<\/hist>');
+    RE_HIST_DATA = re.compile('<data><sensor>(?P<sensor>[^>]*)<\/sensor>(?P<data>.*?)<\/data>');
+    RE_HIST_VALUE = re.compile('<(?P<unit>[hdm])(?P<duration>[0-9]{3})>(?P<value>[^<]*)');
+
+    def parseLine(self, line):
+        with readings_lock:
+            readings['lines'] += 1
+            match = self.RE_WATTS.search(line)
+            if match:
+                timeNow = time.time()
+                if readings['watts']:
+                    duration = timeNow - self.timeLast
+                    readings['joules'] += readings['watts'] * duration
+                self.timeLast = timeNow
+                readings['watts'] = int(match.group('watts'))
+            match = self.RE_TEMP.search(line)
+            if match:
+                readings['temp'] = float(match.group('temp'))
+        match = self.RE_HIST.search(line)
+        if match:
+            with history_lock:
+                for data in self.RE_HIST_DATA.finditer(match.group(0)):
+                    sensor = int(data.group('sensor'))
+                    for value in self.RE_HIST_VALUE.finditer(data.group('data')):
+                        unit = value.group('unit')
+                        duration = int(value.group('duration'), 10)
+                        value = float(value.group('value'))
+                        history[unit][duration][sensor] = value
+
+class rainforestEagleParser(parser):
+
+    RE_DEMAND = re.compile('<rainforest .*?<InstantaneousDemand>.*?'
+        '<Demand>(?P<demand>(?:0[xX])?[\dA-Fa-f]+)</Demand>.*?'
+        '<Multiplier>(?P<multiplier>(?:0[xX])?[\dA-Fa-f]+)</Multiplier>.*?'
+        '<Divisor>(?P<divisor>(?:0[xX])?[\dA-Fa-f]+)</Divisor>.*?'
+        '</InstantaneousDemand>.*?</rainforest>')
+
+    def parseLine(self, line):
+        with readings_lock:
+            readings['lines'] += 1
+            match = self.RE_DEMAND.search(line)
+            if match:
+                timeNow = time.time()
+                if readings['watts']:
+                    duration = timeNow - self.timeLast
+                    readings['joules'] += readings['watts'] * duration
+                self.timeLast = timeNow
+                kW = (int(match.group('demand'), 0) *
+                      int(match.group('multiplier'), 0) /
+                      int(match.group('divisor'), 0))
+                readings['watts'] = int(kW * 1000)
 
 class serviceThread(threading.Thread):
 
@@ -262,6 +297,26 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                 self.handleHistoryResponse(urlparse.parse_qs(url.query))
             else:
                 self.handleVariableResponse(url.path)
+        except Exception as e:
+            self.send_error(500)
+            msg = '%s %s %s' % (self.client_address, self.path, traceback.format_exc())
+            print >>sys.stderr, msg
+            dumpLog(msg)
+
+    def do_POST(self): # on each client request
+        try:
+            url = urlparse.urlsplit(self.path)
+            if url.path == '/post':
+                data_len = int(self.headers.getheader('Content-Length'))
+                data = self.rfile.read(data_len)
+                assert len(data) == data_len
+                # for simplicity remove newlines & whitespace from post data
+                data = re.sub('\n *', '', data) + '\n'
+                written = monitor.serialPort.write(data)
+                assert written == len(data)
+                self.send_response(200, 'OK')
+                self.send_header('Connection', 'close')
+                self.end_headers()
         except Exception as e:
             self.send_error(500)
             msg = '%s %s %s' % (self.client_address, self.path, traceback.format_exc())
@@ -458,4 +513,10 @@ for name, settings in config['services'].iteritems():
   if settings.get('enabled', True):
     services.append(serviceThread(name, settings))
 
-serialMonitor().watch()
+parser = {
+    'cc128': currentcostEnviParser,
+    'eagle': rainforestEagleParser,
+    }[config['device']]()
+
+monitor = serialMonitor(config, parser)
+monitor.watch()
