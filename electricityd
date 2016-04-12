@@ -47,7 +47,7 @@ clients_lock = threading.Lock()
 log = collections.deque([], config['maxLogItems'])
 log_lock = threading.Lock()
 
-readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0}
+readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0, 'relative_humidity': 0}
 readings_lock = threading.Lock()
 # key: duration (h/m/d), key: offset (numeric), value: 10 element list of float
 history = collections.defaultdict(
@@ -65,9 +65,9 @@ def dumpLog(state):
 
 class serialMonitor(object):
 
-    def __init__(self, config, parser):
+    def __init__(self, config, parsers):
         self.config = config
-        self.parser = parser
+        self.parsers = parsers
         self.serialPort = serial.serial_for_url(self.config['serialAddr'],
                                                 baudrate=self.config['serialBaud'],
                                                 timeout=self.config['serialTimeout'])
@@ -92,7 +92,9 @@ class serialMonitor(object):
                     powerfail = False
                     dumpLog('okay')
                     os.system(self.config['powerFailScript'] % 'okay')
-                self.parser.parseLine(line)
+                for parser in self.parsers:
+                    if parser.parseLine(line):
+                        continue
                 self.sendToClients(line)
             else:
                 if not powerfail:
@@ -163,6 +165,21 @@ class rainforestEagleParser(parser):
                       int(match.group('multiplier'), 0) /
                       int(match.group('divisor'), 0))
                 readings['watts'] = int(kW * 1000)
+
+class temperedParser(parser):
+
+    RE_TEMPERED = re.compile('<tempered>'
+        '<temperature>(?P<temp>[\-\d.]+)</temperature>.*?'
+        '<relative_humidity>(?P<relative_humidity>[\-\d.]+)</relative_humidity>.*?'
+        '</tempered>')
+
+    def parseLine(self, line):
+        with readings_lock:
+            readings['lines'] += 1
+            match = self.RE_TEMPERED.search(line)
+            if match:
+                readings['temp'] = float(match.group('temp'))
+                readings['relative_humidity'] = float(match.group('relative_humidity'))
 
 class serviceThread(threading.Thread):
 
@@ -510,13 +527,16 @@ xmlServer.start('xmlserver')
 
 services = []
 for name, settings in config['services'].iteritems():
-  if settings.get('enabled', True):
-    services.append(serviceThread(name, settings))
+    if settings.get('enabled', True):
+        services.append(serviceThread(name, settings))
 
-parser = {
-    'cc128': currentcostEnviParser,
-    'eagle': rainforestEagleParser,
-    }[config['device']]()
+parsers = []
+for device in config['devices']:
+    parsers.append({
+      'cc128': currentcostEnviParser,
+      'eagle': rainforestEagleParser,
+      'tempered': temperedParser,
+    }[device]())
 
-monitor = serialMonitor(config, parser)
+monitor = serialMonitor(config, parsers)
 monitor.watch()
