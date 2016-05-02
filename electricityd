@@ -329,6 +329,8 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                 assert len(data) == data_len
                 # for simplicity remove newlines & whitespace from post data
                 data = re.sub('\n *', '', data) + '\n'
+                # remove private data
+                data = re.sub('<(DeviceMacId|MeterMacId|InstallCode|LinkKey|CoordMacId|ExtPanId)>[^<]*</(DeviceMacId|MeterMacId|InstallCode|LinkKey|CoordMacId|ExtPanId)>', '', data)
                 written = monitor.serialPort.write(data)
                 assert written == len(data)
                 self.send_response(200, 'OK')
