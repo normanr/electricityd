@@ -4,6 +4,11 @@ var re_time = /<time>([\-\d:]+)<\/time>/;
 var re_demand = /<rainforest .*?timestamp="(\d+)s".*?<InstantaneousDemand>.*?<Demand>((?:0[xX])?[\dA-Fa-f]+)<\/Demand>.*?<Multiplier>((?:0[xX])?[\dA-Fa-f]+)<\/Multiplier>.*?<Divisor>((?:0[xX])?[\dA-Fa-f]+)<\/Divisor>.*?<\/InstantaneousDemand>.*?<\/rainforest>/;
 var re_tempered = /<tempered><temperature>([\-\d.]+)<\/temperature>.*?<relative_humidity>([\-\d.]+)<\/relative_humidity>.*?<\/tempered>/;
 
+window.onerror = function(message, source, lineno, colno, error) {
+  msg = source + ':' + lineno + ':' + colno + ':' + message;
+  $('#error').prepend($('<span>').text(msg + '\n'));
+};
+
 function updateReadings(timestamp) {
   $.get('log', {'ts': timestamp}, function(data) {
     output = '';
@@ -28,7 +33,7 @@ function updateReadings(timestamp) {
         var timestamp = new Date(parseInt(idemand[++i]) * 1000);
         $('#time').text(timestamp.toLocaleTimeString());
         var demand = parseInt(idemand[++i]) * parseInt(idemand[++i]) / parseInt(idemand[++i]) * 1000;
-        $('#watts').text(' '.repeat(5 - demand.toFixed().length) + demand.toFixed());
+        $('#watts').text('     '.slice(demand.toFixed().length) + demand.toFixed());
       }
       var tempered = re_tempered.exec(line);
       if (tempered) {
