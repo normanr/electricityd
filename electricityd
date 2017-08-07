@@ -51,7 +51,7 @@ clients = []
 clients_lock = threading.Lock()
 log_lock = threading.Lock()
 
-readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0, 'relative_humidity': 0}
+readings = {}
 readings_lock = threading.Lock()
 # key: duration (h/m/d), key: offset (numeric), value: 10 element list of float
 history = collections.defaultdict(
@@ -122,6 +122,13 @@ class currentcostEnviParser(parser):
     RE_HIST_DATA = re.compile('<data><sensor>(?P<sensor>[^>]*)<\/sensor>(?P<data>.*?)<\/data>');
     RE_HIST_VALUE = re.compile('<(?P<unit>[hdm])(?P<duration>[0-9]{3})>(?P<value>[^<]*)');
 
+    def __init__(self):
+        readings.setdefault('lines', 0)
+        readings.setdefault('last_cc128', 0)
+        readings.setdefault('watts', 0)
+        readings.setdefault('joules', 0)
+        readings.setdefault('temp', 0)
+
     def parseLine(self, line):
         with readings_lock:
             readings['lines'] += 1
@@ -132,6 +139,7 @@ class currentcostEnviParser(parser):
                     duration = timeNow - self.timeLast
                     readings['joules'] += readings['watts'] * duration
                 self.timeLast = timeNow
+                readings['last_cc128'] = timeNow
                 readings['watts'] = int(match.group('watts'))
             match = self.RE_TEMP.search(line)
             if match:
@@ -155,6 +163,12 @@ class rainforestEagleParser(parser):
         '<Divisor>(?P<divisor>(?:0[xX])?[\dA-Fa-f]+)</Divisor>.*?'
         '</InstantaneousDemand>.*?</rainforest>')
 
+    def __init__(self):
+        readings.setdefault('lines', 0)
+        readings.setdefault('last_eagle', 0)
+        readings.setdefault('watts', 0)
+        readings.setdefault('joules', 0)
+
     def parseLine(self, line):
         with readings_lock:
             readings['lines'] += 1
@@ -165,6 +179,7 @@ class rainforestEagleParser(parser):
                     duration = timeNow - self.timeLast
                     readings['joules'] += readings['watts'] * duration
                 self.timeLast = timeNow
+                readings['last_eagle'] = timeNow
                 kW = (int(match.group('demand'), 0) *
                       int(match.group('multiplier'), 0) /
                       int(match.group('divisor'), 0))
@@ -177,11 +192,18 @@ class temperedParser(parser):
         '<relative_humidity>(?P<relative_humidity>[\-\d.]+)</relative_humidity>.*?'
         '</tempered>')
 
+    def __init__(self):
+        readings.setdefault('lines', 0)
+        readings.setdefault('last_tempered', 0)
+        readings.setdefault('temp', 0)
+        readings.setdefault('relative_humidity', 0)
+
     def parseLine(self, line):
         with readings_lock:
             readings['lines'] += 1
             match = self.RE_TEMPERED.search(line)
             if match:
+                readings['last_tempered'] = time.time()
                 readings['temp'] = float(match.group('temp'))
                 readings['relative_humidity'] = float(match.group('relative_humidity'))
 
