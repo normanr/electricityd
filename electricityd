@@ -26,25 +26,29 @@ import urlparse
 
 __version__ = '4.0'
 
-if len(sys.argv) < 2:
-    print >>sys.stderr, 'missing config filename'
-    sys.exit(1)
+def init(args):
+    if len(args) < 1:
+        print >>sys.stderr, 'missing config filename'
+        sys.exit(1)
 
-with open(sys.argv[1]) as f:
-    config = ast.literal_eval(f.read())
+    with open(args[0]) as f:
+        global config
+        config = ast.literal_eval(f.read())
 
-config_keys = ['xmlServerAddress', 'httpServerAddress', 'httpServerRoot', 'serialAddr',
-               'serialBaud', 'serialTimeout', 'powerFailScript',
-               'logFile', 'logTimeFormat', 'maxLogItems', 'services']
-for key in config_keys:
-    assert key in config, '%r not found in config' % key
+    config_keys = ['xmlServerAddress', 'httpServerAddress', 'httpServerRoot', 'serialAddr',
+                   'serialBaud', 'serialTimeout', 'powerFailScript',
+                   'logFile', 'logTimeFormat', 'maxLogItems', 'services']
+    for key in config_keys:
+        assert key in config, '%r not found in config' % key
 
-if config['httpServerRoot']:
-    os.chdir(config['httpServerRoot'])
+    if config['httpServerRoot']:
+        os.chdir(config['httpServerRoot'])
+
+    global log
+    log = collections.deque([], config['maxLogItems'])
 
 clients = []
 clients_lock = threading.Lock()
-log = collections.deque([], config['maxLogItems'])
 log_lock = threading.Lock()
 
 readings = {'lines': 0, 'temp': 0, 'watts': 0, 'joules': 0, 'relative_humidity': 0}
@@ -521,24 +525,30 @@ class BackgroundMixin(SocketServer.ThreadingMixIn):
 class BackgroundHTTP6Server(BackgroundMixin, IPv6Mixin, BaseHTTPServer.HTTPServer): pass
 class BackgroundTCP6Server(BackgroundMixin, IPv6Mixin, SocketServer.TCPServer): pass
 
-httpServer = BackgroundHTTP6Server(config['httpServerAddress'], httpRequestHandler)
-httpServer.start('httpserver')
+def main(args):
+    init(args)
 
-xmlServer = BackgroundTCP6Server(config['xmlServerAddress'], xmlSocketHandler)
-xmlServer.start('xmlserver')
+    httpServer = BackgroundHTTP6Server(config['httpServerAddress'], httpRequestHandler)
+    httpServer.start('httpserver')
 
-services = []
-for name, settings in config['services'].iteritems():
-    if settings.get('enabled', True):
-        services.append(serviceThread(name, settings))
+    xmlServer = BackgroundTCP6Server(config['xmlServerAddress'], xmlSocketHandler)
+    xmlServer.start('xmlserver')
 
-parsers = []
-for device in config['devices']:
-    parsers.append({
-      'cc128': currentcostEnviParser,
-      'eagle': rainforestEagleParser,
-      'tempered': temperedParser,
-    }[device]())
+    services = []
+    for name, settings in config['services'].iteritems():
+        if settings.get('enabled', True):
+            services.append(serviceThread(name, settings))
 
-monitor = serialMonitor(config, parsers)
-monitor.watch()
+    parsers = []
+    for device in config['devices']:
+        parsers.append({
+          'cc128': currentcostEnviParser,
+          'eagle': rainforestEagleParser,
+          'tempered': temperedParser,
+        }[device]())
+
+    monitor = serialMonitor(config, parsers)
+    monitor.watch()
+
+if __name__ == '__main__':
+    main(sys.argv[1:])
