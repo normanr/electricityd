@@ -9,6 +9,7 @@ import datetime
 import gviz_api
 import httplib
 import json
+import operator
 import os
 import prctl
 import Queue
@@ -317,9 +318,87 @@ class xmlSocketHandler(SocketServer.BaseRequestHandler):
                 clients.remove(queue)
             self.request.close()
 
+class calculator(object):
+    operations1 = {
+        'int': int,
+    }
+    operations2 = {
+        '<' : operator.lt,
+        '>' : operator.gt,
+        '<=' : operator.le,
+        '>=' : operator.ge,
+        '*' : operator.mul,
+        '/' : operator.div,
+        '+' : operator.add,
+        '-' : operator.sub,
+    }
+
+    def __init__(self):
+        self.response_code = 200
+        self.operations1['assert'] = self.assert_value
+        with readings_lock:
+            self.readings = readings.copy()
+
+    def assert_value(self, value):
+        if not value:
+            self.response_code = 500
+        return value
+
+    def calculate_value(self, ops):
+        def next_value():
+            op = ops.next()
+            if op in self.readings:
+                return self.readings[op]
+            elif op == '(':
+                return self.calculate_value(ops)
+            elif (op in {'', ')'} or
+                  op in self.operations1 or
+                  op in self.operations2):
+                return op
+            elif op == 'now':
+                return time.time()
+            else:
+                try:
+                    if '.' in op:
+                        op = float(op)
+                    else:
+                        op = int(op)
+                except ValueError as e:
+                    raise ValueError('Bad value %s' % op)
+            return op
+
+        has_value = False
+        while True:
+            try:
+                op = next_value()
+            except StopIteration:
+                return value
+            if op in self.operations1:
+                value = self.operations1[op](next_value())
+            elif op in self.operations2:
+                rhs = next_value()
+                if rhs == 'int':
+                    value = int(value)
+                else:
+                    value = self.operations2[op](value, rhs)
+            elif op == '':
+                pass
+            elif op == ')':
+                return value
+            elif not has_value:
+                value = op
+                has_value = True
+            else:
+                raise ValueError('Invalid op %s' % op)
+
+    def calc(self, expression):
+        if not expression:
+            return expression
+        value = self.calculate_value(iter(re.split(r'([^\w.]+)', expression)))
+        return value
+
 class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     wbufsize = -1  # http://lautaportti.wordpress.com/2011/04/01/basehttprequesthandler-wastes-tcp-packets/
-    valid_constants = ['', '0']
 
     def version_string(self):
         return 'electricityd/%s %s' % (
@@ -476,7 +555,7 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         return 'text/csv', ','.join((v for k,v in results))
 
     def formatAsJson(self, results):
-        return 'application/json', json.dumps(dict(results))
+        return 'application/json', json.dumps(collections.OrderedDict(results))
 
     def formatAsTxt(self, results):
         return 'text/plain', '\r\n'.join((v for k,v in results))
@@ -486,43 +565,30 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             self.send_error(400, 'Invalid request')
             return
 
-        variables, fmt = path.lstrip('/').rsplit('.', 1)
+        expressions, fmt = path.lstrip('/').rsplit('.', 1)
         formatter = getattr(self, 'formatAs%s' % fmt.title(), None)
         if not formatter:
             self.send_error(400, 'Invalid format %s' % fmt)
             return
 
-        variables = variables.split(',')
-        with readings_lock:
-            local_readings = readings.copy()
+        calc = calculator()
+        if expressions == 'all':
+            expressions = sorted(calc.readings.keys())
+        else:
+            expressions = expressions.split(',')
+
         results = []
-        for variable in variables:
-            if variable in self.valid_constants:
-                results.append(variable)
-                continue
-            var_ops = variable.split('/')
-            variable, ops = var_ops[0], var_ops[1:]
-            if not variable in local_readings:
-                self.send_error(400, 'Invalid variable %s' % variable)
+        for expression in expressions:
+            try:
+                value = calc.calc(expression)
+            except ValueError as e:
+                self.send_error(400, str(e))
                 return
-            value = local_readings[variable]
-            for op in ops:
-                if op == 'int':
-                    value = int(value)
-                else:
-                    try:
-                        if '.' in op:
-                            value = value / float(op)
-                        else:
-                            value = value / int(op)
-                    except (ValueError, ZeroDivisionError) as e:
-                        self.send_error(400, 'Invalid op %s' % op)
-                        return
             results.append(str(value))
 
-        content_type, result = formatter(zip(variables, results))
+        content_type, result = formatter(zip(expressions, results))
 
-        self.send_response(200, 'OK')
+        self.send_response(calc.response_code)
         self.send_header('Content-Type', content_type)
         self.send_header('Connection', 'close')
         self.end_headers()

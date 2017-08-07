@@ -39,6 +39,7 @@ class electricitydTest(unittest.TestCase):
             watts=56.7,
             joules=890.1,
             relative_humidity=34.5,
+            last_data=2500,
         )
 
     def test_handleVariableResponse(self, mock_time):
@@ -75,6 +76,38 @@ class electricitydTest(unittest.TestCase):
             '/joules/3.6.csv')
         self.assertTrue(headers.startswith('HTTP/1.0 200 '), msg=headers)
         self.assertEqual(body.rstrip(), '247.25')
+
+        # testing all variable retrieval
+        headers, body = make_request(electricityd.httpRequestHandler,
+            '/all.json')
+        self.assertTrue(headers.startswith('HTTP/1.0 200 '), msg=headers)
+        self.assertEqual(body.rstrip(),
+            '{"joules": "890.1", "last_data": "2500",'
+            ' "relative_humidity": "34.5", "temp": "23.4", "watts": "56.7"}')
+
+        # testing data age
+        headers, body = make_request(electricityd.httpRequestHandler,
+            '/now-last_data.csv')
+        self.assertTrue(headers.startswith('HTTP/1.0 200 '), msg=headers)
+        self.assertEqual(body.rstrip(), '200')
+
+        # testing basic math
+        headers, body = make_request(electricityd.httpRequestHandler,
+            '/1+2,7-3,1+2*2,int(1.2+2.4),2<3,3<=2.csv')
+        self.assertTrue(headers.startswith('HTTP/1.0 200 '), msg=headers)
+        self.assertEqual(body.rstrip(), '3,4,6,3,True,False')
+
+        # testing assert
+        headers, body = make_request(electricityd.httpRequestHandler,
+            'assert(1<2),(3<2),4<5.csv')
+        self.assertTrue(headers.startswith('HTTP/1.0 200 '), msg=headers)
+        self.assertEqual(body.rstrip(), 'True,False,True')
+
+        # testing assert
+        headers, body = make_request(electricityd.httpRequestHandler,
+            '1<2,assert(3<2),assert(now-last_data<300).csv')
+        self.assertTrue(headers.startswith('HTTP/1.0 500 '), msg=headers)
+        self.assertEqual(body.rstrip(), 'True,False,True')
 
 
 if __name__ == '__main__':
