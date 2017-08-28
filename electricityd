@@ -622,11 +622,6 @@ def main(args):
     xmlServer = BackgroundTCP6Server(config['xmlServerAddress'], xmlSocketHandler)
     xmlServer.start('xmlserver')
 
-    services = []
-    for name, settings in config['services'].iteritems():
-        if settings.get('enabled', True):
-            services.append(serviceThread(name, settings))
-
     parsers = []
     for device in config['devices']:
         parsers.append({
@@ -635,6 +630,12 @@ def main(args):
           'tempered': temperedParser,
         }[device]())
 
+    services = []
+    for name, settings in config['services'].iteritems():
+        if settings.get('enabled', True):
+            services.append(serviceThread(name, settings))
+
+    global monitor
     monitor = serialMonitor(config, parsers)
     monitor.watch()
 
