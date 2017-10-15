@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib
 import urllib2
 import urlparse
 
@@ -418,7 +419,7 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             elif url.path == '/hist.gviz':
                 self.handleHistoryResponse(urlparse.parse_qs(url.query))
             else:
-                self.handleVariableResponse(url.path)
+                self.handleVariableResponse(urllib.unquote(url.path))
         except Exception as e:
             self.send_error(500)
             msg = '%s %s %s' % (self.client_address, self.path, traceback.format_exc())
