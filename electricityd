@@ -400,6 +400,7 @@ class calculator(object):
 
 class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     wbufsize = -1  # http://lautaportti.wordpress.com/2011/04/01/basehttprequesthandler-wastes-tcp-packets/
+    protocol_version = 'HTTP/1.1'
 
     def version_string(self):
         return 'electricityd/%s %s' % (
@@ -439,9 +440,11 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
                 data = re.sub('<(DeviceMacId|MeterMacId|InstallCode|LinkKey|CoordMacId|ExtPanId)>[^<]*</(DeviceMacId|MeterMacId|InstallCode|LinkKey|CoordMacId|ExtPanId)>', '', data)
                 written = monitor.serialPort.write(data)
                 assert written == len(data)
-                self.send_response(200, 'OK')
-                self.send_header('Connection', 'close')
+                self.send_response(204, 'No Content')
+                self.send_header('Content-Length', 0)
                 self.end_headers()
+                return
+            self.send_error(404)
         except Exception as e:
             self.send_error(500)
             msg = '%s %s %s' % (self.client_address, self.path, traceback.format_exc())
@@ -497,13 +500,13 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         table = gviz_api.DataTable(schema)
         table.LoadData(data[unit])
 
-        result = table.ToResponse(tqx=tqx)
+        result = table.ToResponse(tqx=tqx) + '\r\n'
 
         self.send_response(200, 'OK')
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Connection', 'close')
+        self.send_header('Content-Length', len(result))
         self.end_headers()
-        self.wfile.write(result + '\r\n')
+        self.wfile.write(result)
 
     def handleLogResponse(self, query):
         try:
@@ -541,13 +544,13 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             'log': [x[2] for x in data],
             'ts': ts,
             'delay': delay,
-        })
+        }) + '\r\n'
 
         self.send_response(200, 'OK')
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Connection', 'close')
+        self.send_header('Content-Length', len(result))
         self.end_headers()
-        self.wfile.write(result + '\r\n')
+        self.wfile.write(result)
 
     def formatAsCacti(self, results):
         return 'text/plain', ' '.join(('%s:%s' % kv for kv in results))
@@ -588,12 +591,13 @@ class httpRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
             results.append(str(value))
 
         content_type, result = formatter(zip(expressions, results))
+        result += '\r\n'
 
         self.send_response(calc.response_code)
         self.send_header('Content-Type', content_type)
-        self.send_header('Connection', 'close')
+        self.send_header('Content-Length', len(result))
         self.end_headers()
-        self.wfile.write(result + '\r\n')
+        self.wfile.write(result)
 
 class IPv6Mixin:
     address_family = socket.AF_INET6
