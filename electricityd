@@ -159,7 +159,7 @@ class currentcostEnviParser(parser):
 
 class rainforestEagleParser(parser):
 
-    RE_DEMAND = re.compile('<rainforest .*?<InstantaneousDemand>.*?'
+    RE_DEMAND = re.compile('<rainforest[^>]*>.*?<InstantaneousDemand>.*?'
         '<Demand>(?P<demand>(?:0[xX])?[\dA-Fa-f]+)</Demand>.*?'
         '<Multiplier>(?P<multiplier>(?:0[xX])?[\dA-Fa-f]+)</Multiplier>.*?'
         '<Divisor>(?P<divisor>(?:0[xX])?[\dA-Fa-f]+)</Divisor>.*?'
@@ -189,7 +189,7 @@ class rainforestEagleParser(parser):
 
 class temperedParser(parser):
 
-    RE_TEMPERED = re.compile('<tempered>'
+    RE_TEMPERED = re.compile('<tempered[^>]*>.*?'
         '<temperature>(?P<temp>[\-\d.]+)</temperature>.*?'
         '<relative_humidity>(?P<relative_humidity>[\-\d.]+)</relative_humidity>.*?'
         '</tempered>')

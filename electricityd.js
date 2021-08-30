@@ -1,8 +1,8 @@
 var re_watts = /<ch1><watts>(0*)(\d+)<\/watts><\/ch1>/;
 var re_temp = /<tmpr> *([\-\d.]+)<\/tmpr>/;
 var re_time = /<time>([\-\d:]+)<\/time>/;
-var re_demand = /<rainforest .*?timestamp="(\d+)s".*?<InstantaneousDemand>.*?<Demand>((?:0[xX])?[\dA-Fa-f]+)<\/Demand>.*?<Multiplier>((?:0[xX])?[\dA-Fa-f]+)<\/Multiplier>.*?<Divisor>((?:0[xX])?[\dA-Fa-f]+)<\/Divisor>.*?<\/InstantaneousDemand>.*?<\/rainforest>/;
-var re_tempered = /<tempered><temperature>([\-\d.]+)<\/temperature>.*?<relative_humidity>([\-\d.]+)<\/relative_humidity>.*?<\/tempered>/;
+var re_demand = /<rainforest[^>]* timestamp="(\d+)s"[^>]*>.*?<InstantaneousDemand>.*?<Demand>((?:0[xX])?[\dA-Fa-f]+)<\/Demand>.*?<Multiplier>((?:0[xX])?[\dA-Fa-f]+)<\/Multiplier>.*?<Divisor>((?:0[xX])?[\dA-Fa-f]+)<\/Divisor>.*?<\/InstantaneousDemand>.*?<\/rainforest>/;
+var re_tempered = /<tempered[^>]*>.*?<temperature>([\-\d.]+)<\/temperature>.*?<relative_humidity>([\-\d.]+)<\/relative_humidity>.*?<\/tempered>/;
 
 window.onerror = function(message, source, lineno, colno, error) {
   msg = source + ':' + lineno + ':' + colno + ':' + message;
