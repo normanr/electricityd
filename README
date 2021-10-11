@@ -1,11 +1,11 @@
 Requirements:
-  Python 2.7
+  Python 3
   http://code.google.com/p/google-visualization-python/
   http://pythonhosted.org/python-prctl/
   http://pyserial.sourceforge.net/
 
 For Debian:
-  $ apt-get install python-pip python-prctl python-serial
+  $ apt-get install python3-pip python3-prctl python3-serial
   $ pip install -U -f http://code.google.com/p/google-visualization-python/ gviz-api-py
 
 USAGE:
