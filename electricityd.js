@@ -3,16 +3,24 @@ var re_temp = /<tmpr> *([\-\d.]+)<\/tmpr>/;
 var re_time = /<time>([\-\d:]+)<\/time>/;
 var re_demand = /<rainforest[^>]* timestamp="(\d+)s"[^>]*>.*?<InstantaneousDemand>.*?<Demand>((?:0[xX])?[\dA-Fa-f]+)<\/Demand>.*?<Multiplier>((?:0[xX])?[\dA-Fa-f]+)<\/Multiplier>.*?<Divisor>((?:0[xX])?[\dA-Fa-f]+)<\/Divisor>.*?<\/InstantaneousDemand>.*?<\/rainforest>/;
 var re_tempered = /<tempered[^>]*>.*?<temperature>([\-\d.]+)<\/temperature>.*?<relative_humidity>([\-\d.]+)<\/relative_humidity>.*?<\/tempered>/;
+var global_epoch = 0;
 
 window.onerror = function(message, source, lineno, colno, error) {
   msg = source + ':' + lineno + ':' + colno + ':' + message;
   $('#error').prepend($('<span>').text(msg + '\n'));
 };
 
-function updateReadings(timestamp) {
+function updateReadings(timestamp, epoch) {
+  if (epoch) {
+    if (epoch != global_epoch) return;
+  } else {
+    epoch = ++global_epoch;
+  }
   $.get('log', {'ts': timestamp}, function(data) {
+    if (epoch != global_epoch) return;
     output = '';
     log = data['log'];
+    let logFilter = window.location.hash ? new RegExp(window.location.hash.slice(1), 'i') : null;
     for (i in log) {
       line = log[i];
       var watts = re_watts.exec(line);
@@ -43,18 +51,21 @@ function updateReadings(timestamp) {
         var humid = parseFloat(tempered[++i]);
         $('#humid').text(humid.toFixed(1));
       }
-      output = line + output;
+      if (window.location.hash && line.search(logFilter) > -1) {
+        output = line + output;
+      }
     }
-    if (output && window.location.hash) {
+    if (output) {
       $('#log').prepend($('<span>').text(output));
     }
-    setTimeout(updateReadings, data['delay'] * 1000, data['ts']);
+    setTimeout(updateReadings, data['delay'] * 1000, data['ts'], epoch);
   }).fail(function(xhr, status, error) {
-      msg = 'Updates paused, refresh to resume.';
-      if (error) {
-        msg = 'Request failed: ' + error + '.  ' + msg
-      }
-      $('#error').prepend($('<span>').text(msg + '\n'));
+    if (epoch != global_epoch) return;
+    msg = 'Updates paused, refresh to resume.';
+    if (error) {
+      msg = 'Request failed: ' + error + '.  ' + msg
+    }
+    $('#error').prepend($('<span>').text(msg + '\n'));
   });
 }
 
@@ -113,4 +124,8 @@ function initLoader() {
 $(function() {
   initLoader();
   updateReadings();
+  window.addEventListener('hashchange', function() {
+    $('#log').text('');
+    updateReadings();
+  });
 });
