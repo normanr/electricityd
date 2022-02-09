@@ -15,6 +15,7 @@ import re
 import serial
 import socket
 import socketserver
+import struct
 import sys
 import threading
 import time
@@ -153,6 +154,12 @@ class currentcostEnviParser(parser):
                         value = float(value.group('value'))
                         history[unit][duration][sensor] = value
 
+def hexint(x, width):
+  i = int(x, 16)
+  if i >= (1 << (width - 1)):
+    i -= (1 << width)
+  return i
+
 class rainforestEagleParser(parser):
 
     RE_DEMAND = re.compile('<rainforest[^>]*>.*?<InstantaneousDemand>.*?'
@@ -166,6 +173,8 @@ class rainforestEagleParser(parser):
         readings.setdefault('last_eagle', 0)
         readings.setdefault('watts', 0)
         readings.setdefault('joules', 0)
+        readings.setdefault('joules_delivered', 0)
+        readings.setdefault('joules_received', 0)
 
     def parseLine(self, line):
         with readings_lock:
@@ -175,12 +184,17 @@ class rainforestEagleParser(parser):
                 timeNow = time.time()
                 if readings['watts']:
                     duration = timeNow - self.timeLast
-                    readings['joules'] += readings['watts'] * duration
+                    joules = readings['watts'] * duration
+                    readings['joules'] += joules
+                    if joules < 0:
+                      readings['joules_received'] -= joules
+                    else:
+                      readings['joules_delivered'] += joules
                 self.timeLast = timeNow
                 readings['last_eagle'] = timeNow
-                kW = (int(match.group('demand'), 0) *
-                      int(match.group('multiplier'), 0) /
-                      int(match.group('divisor'), 0))
+                kW = (hexint(match.group('demand'), 32) *
+                      hexint(match.group('multiplier'), 32) /
+                      hexint(match.group('divisor'), 32))
                 readings['watts'] = int(kW * 1000)
 
 class temperedParser(parser):
@@ -408,7 +422,7 @@ class httpRequestHandler(http.server.SimpleHTTPRequestHandler):
             url = urllib.parse.urlsplit(self.path)
             if config['httpServerRoot']:
                 filename = self.translate_path(url.path)
-                if os.path.isfile(filename) or filename == config['httpServerRoot']:
+                if os.path.isfile(filename) or url.path == '/':
                     http.server.SimpleHTTPRequestHandler.do_GET(self)
                     return
             if url.path == '/log':

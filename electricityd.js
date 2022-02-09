@@ -10,6 +10,10 @@ window.onerror = function(message, source, lineno, colno, error) {
   $('#error').prepend($('<span>').text(msg + '\n'));
 };
 
+function parseHexInt(s) {
+  return parseInt(s, 16) >> 0;
+}
+
 function updateReadings(timestamp, epoch) {
   if (epoch) {
     if (epoch != global_epoch) return;
@@ -40,7 +44,9 @@ function updateReadings(timestamp, epoch) {
         var i = 0;
         var timestamp = new Date(parseInt(idemand[++i]) * 1000);
         $('#time').text(timestamp.toLocaleTimeString());
-        var demand = parseInt(idemand[++i]) * parseInt(idemand[++i]) / parseInt(idemand[++i]) * 1000;
+        var demand = parseHexInt(idemand[++i]) *
+                     parseHexInt(idemand[++i]) /
+                     parseHexInt(idemand[++i]) * 1000;
         $('#watts').text('     '.slice(demand.toFixed().length) + demand.toFixed());
       }
       var tempered = re_tempered.exec(line);
