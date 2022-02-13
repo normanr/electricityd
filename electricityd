@@ -49,6 +49,7 @@ def init(args):
 clients = []
 clients_lock = threading.Lock()
 log_lock = threading.Lock()
+serial_lock = threading.Lock()
 
 readings = {}
 readings_lock = threading.Lock()
@@ -319,10 +320,11 @@ class xmlSocketHandler(socketserver.BaseRequestHandler):
                 self.request.send(data.encode('utf8'))
                 queue_.task_done()
                 try:
-                    self.request.recv(1024)
+                    if self.request.recv(1024):
+                        return
                 except BlockingIOError:
                     pass
-        except OSError as msg:
+        except OSError:
             pass
         finally:
             with clients_lock:
@@ -448,7 +450,8 @@ class httpRequestHandler(http.server.SimpleHTTPRequestHandler):
                 data = re.sub(b'\n *', b'', data) + b'\n'
                 # remove private data
                 data = re.sub(b'<(DeviceMacId|MeterMacId|InstallCode|LinkKey|CoordMacId|ExtPanId)>[^<]*</(DeviceMacId|MeterMacId|InstallCode|LinkKey|CoordMacId|ExtPanId)>', b'', data)
-                written = monitor.serialPort.write(data)
+                with serial_lock:
+                    written = monitor.serialPort.write(data)
                 assert written == len(data)
                 self.send_response(204, 'No Content')
                 self.send_header('Content-Length', 0)
