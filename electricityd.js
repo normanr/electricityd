@@ -24,7 +24,7 @@ function updateReadings(timestamp, epoch) {
     if (epoch != global_epoch) return;
     output = '';
     log = data['log'];
-    let logFilter = window.location.hash ? new RegExp(window.location.hash.slice(1), 'i') : null;
+    var logFilter = window.location.hash ? new RegExp(window.location.hash.slice(1), 'i') : null;
     for (i in log) {
       line = log[i];
       var watts = re_watts.exec(line);
